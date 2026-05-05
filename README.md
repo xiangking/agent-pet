@@ -19,6 +19,7 @@ It is built with Tauri v2, Rust, React, and Vite.
 ## Screenshot
 
 ![Agent Pet screenshot](./docs/media/agent-pet-screenshot.png)
+![Agent Pet screenshot 2](./docs/media/agent-pet-screenshot-2.png)
 
 ## Demo
 

@@ -19,6 +19,7 @@ Agent Pet 是一个轻量级 AI Agent 桌面宠物。它会悬浮在桌面上，
 ## 截图
 
 ![Agent Pet 截图](./docs/media/agent-pet-screenshot.png)
+![Agent Pet 截图 2](./docs/media/agent-pet-screenshot-2.png)
 
 ## 演示
 
