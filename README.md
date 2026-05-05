@@ -20,6 +20,9 @@ It is built with Tauri v2, Rust, React, and Vite.
 
 ![Agent Pet screenshot](./docs/media/agent-pet-screenshot.png)
 ![Agent Pet screenshot 2](./docs/media/agent-pet-screenshot-2.png)
+![Agent Pet screenshot 3](./docs/media/agent-pet-screenshot-3.png)
+
+The third screenshot was captured on Windows.
 
 ## Demo
 
@@ -30,7 +33,7 @@ It is built with Tauri v2, Rust, React, and Vite.
 ## Platform Status
 
 - macOS has been tested locally.
-- Windows support is planned and currently being tested.
+- Windows has been tested locally.
 - Linux should work in principle through Tauri, but has not been fully verified yet.
 
 ## Requirements

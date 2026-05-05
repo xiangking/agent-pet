@@ -20,6 +20,9 @@ Agent Pet 是一个轻量级 AI Agent 桌面宠物。它会悬浮在桌面上，
 
 ![Agent Pet 截图](./docs/media/agent-pet-screenshot.png)
 ![Agent Pet 截图 2](./docs/media/agent-pet-screenshot-2.png)
+![Agent Pet 截图 3](./docs/media/agent-pet-screenshot-3.png)
+
+第三张截图拍摄于 Windows。
 
 ## 演示
 
@@ -30,7 +33,7 @@ Agent Pet 是一个轻量级 AI Agent 桌面宠物。它会悬浮在桌面上，
 ## 平台状态
 
 - macOS 已完成本地测试。
-- Windows 支持正在测试中。
+- Windows 已完成本地测试。
 - Linux 理论上可通过 Tauri 支持，但目前还没有完整验证。
 
 ## 环境要求
