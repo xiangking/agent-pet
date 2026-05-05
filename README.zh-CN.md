@@ -27,6 +27,12 @@ Agent Pet 是一个轻量级 AI Agent 桌面宠物。它会悬浮在桌面上，
 
 [查看 MP4 演示视频](./docs/media/agent-pet-demo.mp4)
 
+## 平台状态
+
+- macOS 已完成本地测试。
+- Windows 支持正在测试中。
+- Linux 理论上可通过 Tauri 支持，但目前还没有完整验证。
+
 ## 环境要求
 
 - Node.js 18+

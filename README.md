@@ -27,6 +27,12 @@ It is built with Tauri v2, Rust, React, and Vite.
 
 [Watch the MP4 demo](./docs/media/agent-pet-demo.mp4)
 
+## Platform Status
+
+- macOS has been tested locally.
+- Windows support is planned and currently being tested.
+- Linux should work in principle through Tauri, but has not been fully verified yet.
+
 ## Requirements
 
 - Node.js 18+
