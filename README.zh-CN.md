@@ -273,6 +273,11 @@ CARGO_NET_OFFLINE=true npm run tauri build
 
 欢迎提交 issue 或 pull request。
 
+## 致谢
+
+感谢 OpenAI 提供的灵感，以及在项目实现过程中参考到的部分资料和示例。
+也感谢 Claude 和 DataWhale 创造出这些可爱的 pet 形象，它们启发了本项目的视觉风格。
+
 ## 许可证
 
 [MIT](./LICENSE)

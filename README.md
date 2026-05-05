@@ -273,6 +273,11 @@ CARGO_NET_OFFLINE=true npm run tauri build
 
 Issues and pull requests are welcome.
 
+## Acknowledgements
+
+Thanks to OpenAI for the inspiration behind the agent-pet idea and for reference material that helped shape parts of this project.
+Thanks to Claude and DataWhale for the cute pet characters that inspired the visual style used here.
+
 ## License
 
 [MIT](./LICENSE)
