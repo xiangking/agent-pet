@@ -1,0 +1,6 @@
+{
+  "id": "fireball",
+  "displayName": "Fireball",
+  "description": "Hot path energy for fast iteration.",
+  "spritesheetPath": "spritesheet.webp"
+}

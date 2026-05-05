@@ -1,0 +1,564 @@
+// Pet state machine
+// Manages state transitions based on messages (animation is handled by the frontend)
+
+use crate::message::default_message_map;
+use crate::pet::{load_pet_config, PetConfig, PetState};
+use crate::settings::{load_settings, save_settings, AppSettings};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use tauri::{Emitter, LogicalSize, Manager};
+
+const CELL_WIDTH: f64 = 192.0;
+const CELL_HEIGHT: f64 = 208.0;
+const MIN_WINDOW_WIDTH: f64 = 240.0;
+const BUBBLE_SPACE_HEIGHT: f64 = 92.0;
+const CODEX_ORIGINAL_SCALE: f64 = 0.45;
+const DEFAULT_PET_SCALE: f64 = CODEX_ORIGINAL_SCALE;
+const MIN_PET_SCALE: f64 = CODEX_ORIGINAL_SCALE * 0.75;
+const MAX_PET_SCALE: f64 = CODEX_ORIGINAL_SCALE * 1.5;
+
+pub struct PetStateMachine {
+    app_handle: tauri::AppHandle,
+    current_state: PetState,
+    loaded_pet: Option<PetConfig>,
+    message_map: HashMap<String, String>,
+    websocket_enabled: bool,
+    websocket_port: u16,
+    codex_monitor_enabled: bool,
+    claude_monitor_enabled: bool,
+    opencode_monitor_enabled: bool,
+    openclaw_monitor_enabled: bool,
+    hermes_monitor_enabled: bool,
+    live_source_paths: HashMap<String, String>,
+    live_source_focus_targets: HashMap<String, String>,
+    live_source_prefix_enabled: bool,
+    pet_scale: f64,
+    language: String,
+}
+
+impl PetStateMachine {
+    pub fn new(app_handle: tauri::AppHandle) -> Self {
+        let settings = load_settings();
+
+        Self {
+            app_handle,
+            current_state: PetState::Idle,
+            loaded_pet: None,
+            message_map: default_message_map(),
+            websocket_enabled: true,
+            websocket_port: 8765,
+            codex_monitor_enabled: live_source_enabled_from_settings(&settings, "codex"),
+            claude_monitor_enabled: live_source_enabled_from_settings(&settings, "claude"),
+            opencode_monitor_enabled: live_source_enabled_from_settings(&settings, "opencode"),
+            openclaw_monitor_enabled: live_source_enabled_from_settings(&settings, "openclaw"),
+            hermes_monitor_enabled: live_source_enabled_from_settings(&settings, "hermes"),
+            live_source_paths: live_source_paths_from_settings(&settings),
+            live_source_focus_targets: live_source_focus_targets_from_settings(&settings),
+            live_source_prefix_enabled: settings.live_source_prefix_enabled,
+            pet_scale: DEFAULT_PET_SCALE,
+            language: normalize_language(&settings.language).to_string(),
+        }
+    }
+
+    pub fn current_state(&self) -> PetState {
+        self.current_state
+    }
+
+    pub fn message_map(&self) -> &HashMap<String, String> {
+        &self.message_map
+    }
+
+    pub fn set_message_map(&mut self, map: HashMap<String, String>) {
+        self.message_map = map;
+    }
+
+    pub fn websocket_enabled(&self) -> bool {
+        self.websocket_enabled
+    }
+
+    pub fn websocket_port(&self) -> u16 {
+        self.websocket_port
+    }
+
+    pub fn set_websocket_enabled(&mut self, enabled: bool) {
+        self.websocket_enabled = enabled;
+    }
+
+    pub fn codex_monitor_enabled(&self) -> bool {
+        self.codex_monitor_enabled
+    }
+
+    pub fn set_codex_monitor_enabled(&mut self, enabled: bool) {
+        self.codex_monitor_enabled = enabled;
+    }
+
+    pub fn claude_monitor_enabled(&self) -> bool {
+        self.claude_monitor_enabled
+    }
+
+    pub fn opencode_monitor_enabled(&self) -> bool {
+        self.opencode_monitor_enabled
+    }
+
+    pub fn openclaw_monitor_enabled(&self) -> bool {
+        self.openclaw_monitor_enabled
+    }
+
+    pub fn hermes_monitor_enabled(&self) -> bool {
+        self.hermes_monitor_enabled
+    }
+
+    pub fn live_source_enabled(&self, source: &str) -> bool {
+        match source {
+            "codex" => self.codex_monitor_enabled,
+            "claude" => self.claude_monitor_enabled,
+            "opencode" => self.opencode_monitor_enabled,
+            "openclaw" => self.openclaw_monitor_enabled,
+            "hermes" => self.hermes_monitor_enabled,
+            _ => false,
+        }
+    }
+
+    pub fn set_live_source_enabled(&mut self, source: &str, enabled: bool) -> Result<(), String> {
+        let updated = match source {
+            "codex" => {
+                self.codex_monitor_enabled = enabled;
+                true
+            }
+            "claude" => {
+                self.claude_monitor_enabled = enabled;
+                true
+            }
+            "opencode" => {
+                self.opencode_monitor_enabled = enabled;
+                true
+            }
+            "openclaw" => {
+                self.openclaw_monitor_enabled = enabled;
+                true
+            }
+            "hermes" => {
+                self.hermes_monitor_enabled = enabled;
+                true
+            }
+            _ => false,
+        };
+
+        if updated {
+            self.persist_settings()
+        } else {
+            Err(format!("Unknown live source: {}", source))
+        }
+    }
+
+    pub fn live_source_path(&self, source: &str) -> Option<String> {
+        self.live_source_paths.get(source).cloned()
+    }
+
+    pub fn live_source_paths(&self) -> HashMap<String, String> {
+        self.live_source_paths.clone()
+    }
+
+    pub fn live_source_focus_targets(&self) -> HashMap<String, String> {
+        self.live_source_focus_targets.clone()
+    }
+
+    pub fn set_live_source_path(&mut self, source: &str, path: String) -> Result<(), String> {
+        if !is_known_live_source(source) {
+            return Err(format!("Unknown live source: {}", source));
+        }
+
+        let defaults = default_live_source_paths();
+        let fallback = defaults
+            .get(source)
+            .ok_or_else(|| format!("Unknown live source: {}", source))?;
+        let path = match path.trim() {
+            "" => fallback.clone(),
+            trimmed => trimmed.to_string(),
+        };
+
+        self.live_source_paths.insert(source.to_string(), path);
+        self.persist_settings()
+    }
+
+    pub fn live_source_focus_target(&self, source: &str) -> Result<String, String> {
+        if !is_known_live_source(source) {
+            return Err(format!("Unknown live source: {}", source));
+        }
+
+        self.live_source_focus_targets
+            .get(source)
+            .cloned()
+            .ok_or_else(|| format!("Unknown live source: {}", source))
+    }
+
+    pub fn set_live_source_focus_target(
+        &mut self,
+        source: &str,
+        target: String,
+    ) -> Result<(), String> {
+        if !is_known_live_source(source) {
+            return Err(format!("Unknown live source: {}", source));
+        }
+
+        let defaults = default_live_source_focus_targets();
+        let fallback = defaults
+            .get(source)
+            .ok_or_else(|| format!("Unknown live source: {}", source))?;
+        let target = match target.trim() {
+            "" => fallback.clone(),
+            trimmed => trimmed.to_string(),
+        };
+
+        validate_focus_target(&target)?;
+        self.live_source_focus_targets
+            .insert(source.to_string(), target);
+        self.persist_settings()
+    }
+
+    pub fn live_source_prefix_enabled(&self) -> bool {
+        self.live_source_prefix_enabled
+    }
+
+    pub fn set_live_source_prefix_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        self.live_source_prefix_enabled = enabled;
+        self.persist_settings()
+    }
+
+    pub fn pet_scale(&self) -> f64 {
+        self.pet_scale
+    }
+
+    pub fn set_pet_scale(&mut self, scale: f64) -> f64 {
+        let scale = scale.clamp(MIN_PET_SCALE, MAX_PET_SCALE);
+        self.pet_scale = scale;
+
+        if let Some(window) = self.app_handle.get_webview_window("pet") {
+            let width = (CELL_WIDTH * scale).max(MIN_WINDOW_WIDTH);
+            let height = CELL_HEIGHT * scale + BUBBLE_SPACE_HEIGHT;
+            let _ = window.set_size(LogicalSize::new(width, height));
+        }
+
+        let _ = self.app_handle.emit("pet-scale-changed", scale);
+        scale
+    }
+
+    pub fn show_codex_bubble(&self, text: &str, source: &str) {
+        if let Some(window) = self.app_handle.get_webview_window("pet") {
+            let _ = window.emit("codex-bubble", codex_bubble_payload(text, source));
+        }
+    }
+
+    pub async fn load_pet(&mut self, pet_id: &str) -> Result<PetConfig, crate::pet::PetError> {
+        let config = load_pet_config(pet_id).await?;
+
+        // Load custom message map if present
+        if !config.message_map.is_empty() {
+            self.message_map = config.message_map.clone();
+        }
+
+        self.loaded_pet = Some(config.clone());
+        self.current_state = PetState::Idle;
+
+        // Notify frontend of pet change
+        if let Some(window) = self.app_handle.get_webview_window("pet") {
+            let _ = window.emit(
+                "pet-loaded",
+                serde_json::to_value(&config).unwrap_or_default(),
+            );
+        }
+        // Also emit state reset
+        if let Some(window) = self.app_handle.get_webview_window("pet") {
+            let _ = window.emit("state-changed", "idle");
+        }
+
+        Ok(config)
+    }
+
+    pub fn handle_message(&mut self, message_type: &str) -> PetState {
+        // Look up state mapping
+        let target_state = self
+            .message_map
+            .get(message_type)
+            .cloned()
+            .unwrap_or_else(|| "idle".to_string());
+
+        match target_state.parse::<PetState>() {
+            Ok(new_state) => {
+                if new_state != self.current_state {
+                    self.current_state = new_state;
+
+                    // Notify frontend of state change
+                    if let Some(window) = self.app_handle.get_webview_window("pet") {
+                        let _ = window.emit("state-changed", self.current_state.to_string());
+                    }
+                }
+                new_state
+            }
+            Err(_) => {
+                log::warn!("Unknown state mapping for message: {}", message_type);
+                self.current_state
+            }
+        }
+    }
+
+    pub fn handle_websocket_message(&mut self, message_type: &str) -> Option<PetState> {
+        if !self.websocket_enabled {
+            return None;
+        }
+
+        Some(self.handle_message(message_type))
+    }
+
+    pub fn get_spritesheet_path(&self) -> Option<String> {
+        self.loaded_pet.as_ref().map(|p| p.spritesheet_path.clone())
+    }
+
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    pub fn set_language(&mut self, language: String) -> Result<(), String> {
+        self.language = normalize_language(&language).to_string();
+        self.persist_settings()
+    }
+
+    fn current_settings(&self) -> AppSettings {
+        AppSettings {
+            live_source_paths: self.live_source_paths.clone(),
+            live_source_focus_targets: self.live_source_focus_targets.clone(),
+            live_source_enabled: HashMap::from([
+                ("codex".to_string(), self.codex_monitor_enabled),
+                ("claude".to_string(), self.claude_monitor_enabled),
+                ("opencode".to_string(), self.opencode_monitor_enabled),
+                ("openclaw".to_string(), self.openclaw_monitor_enabled),
+                ("hermes".to_string(), self.hermes_monitor_enabled),
+            ]),
+            live_source_prefix_enabled: self.live_source_prefix_enabled,
+            language: self.language.clone(),
+        }
+    }
+
+    fn persist_settings(&self) -> Result<(), String> {
+        save_settings(&self.current_settings())
+    }
+}
+
+fn normalize_language(language: &str) -> &str {
+    match language {
+        "zh-CN" => "zh-CN",
+        _ => "en",
+    }
+}
+
+pub fn default_live_source_paths() -> HashMap<String, String> {
+    HashMap::from([
+        ("codex".to_string(), home_path([".codex", "sessions"])),
+        ("claude".to_string(), home_path([".claude", "projects"])),
+        ("opencode".to_string(), default_opencode_path()),
+        ("openclaw".to_string(), home_path([".openclaw", "agents"])),
+        ("hermes".to_string(), home_path([".hermes", "sessions"])),
+    ])
+}
+
+pub fn default_live_source_focus_targets() -> HashMap<String, String> {
+    HashMap::from([
+        ("codex".to_string(), "app:Codex".to_string()),
+        ("claude".to_string(), "app:Claude".to_string()),
+        ("opencode".to_string(), "app:Terminal".to_string()),
+        (
+            "openclaw".to_string(),
+            "url:http://127.0.0.1:18789/".to_string(),
+        ),
+        ("hermes".to_string(), "app:Terminal".to_string()),
+    ])
+}
+
+fn default_opencode_path() -> String {
+    #[cfg(windows)]
+    {
+        return platform_data_path(["opencode", "opencode.db"]);
+    }
+
+    #[cfg(not(windows))]
+    {
+        home_path([".local", "share", "opencode", "opencode.db"])
+    }
+}
+
+fn home_path<const N: usize>(parts: [&str; N]) -> String {
+    path_from_base(dirs::home_dir(), parts)
+}
+
+#[cfg(windows)]
+fn platform_data_path<const N: usize>(parts: [&str; N]) -> String {
+    path_from_base(dirs::data_local_dir().or_else(dirs::home_dir), parts)
+}
+
+fn path_from_base<const N: usize>(base: Option<PathBuf>, parts: [&str; N]) -> String {
+    let Some(mut path) = base else {
+        return parts.join("/");
+    };
+
+    for part in parts {
+        path.push(part);
+    }
+
+    path.to_string_lossy().to_string()
+}
+
+fn live_source_paths_from_settings(settings: &AppSettings) -> HashMap<String, String> {
+    let mut paths = default_live_source_paths();
+
+    for source in ["codex", "claude", "opencode", "openclaw", "hermes"] {
+        if let Some(path) = settings.live_source_paths.get(source) {
+            let path = path.trim();
+            if !path.is_empty() {
+                paths.insert(source.to_string(), path.to_string());
+            }
+        }
+    }
+
+    paths
+}
+
+fn live_source_focus_targets_from_settings(settings: &AppSettings) -> HashMap<String, String> {
+    let mut targets = default_live_source_focus_targets();
+
+    for source in ["codex", "claude", "opencode", "openclaw", "hermes"] {
+        if let Some(target) = settings.live_source_focus_targets.get(source) {
+            let target = target.trim();
+            if !target.is_empty() && validate_focus_target(target).is_ok() {
+                targets.insert(source.to_string(), target.to_string());
+            }
+        }
+    }
+
+    targets
+}
+
+fn live_source_enabled_from_settings(settings: &AppSettings, source: &str) -> bool {
+    settings
+        .live_source_enabled
+        .get(source)
+        .copied()
+        .unwrap_or(source == "codex")
+}
+
+fn is_known_live_source(source: &str) -> bool {
+    matches!(
+        source,
+        "codex" | "claude" | "opencode" | "openclaw" | "hermes"
+    )
+}
+
+fn validate_focus_target(target: &str) -> Result<(), String> {
+    let target = target.trim();
+    if let Some(name) = target.strip_prefix("app:") {
+        if !name.trim().is_empty() {
+            return Ok(());
+        }
+    }
+
+    if let Some(url) = target.strip_prefix("url:") {
+        let url = url.trim();
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return Ok(());
+        }
+    }
+
+    Err("Focus target must be app:<name> or url:<http(s)-url>".to_string())
+}
+
+fn source_label(source: &str) -> &str {
+    match source {
+        "codex" => "Codex",
+        "claude" => "Claude Code",
+        "opencode" => "opencode",
+        "openclaw" => "OpenClaw",
+        "hermes" => "Hermes Agent",
+        _ => source,
+    }
+}
+
+fn codex_bubble_payload(text: &str, source: &str) -> serde_json::Value {
+    serde_json::json!({
+        "text": text,
+        "source": source,
+        "sourceLabel": source_label(source),
+    })
+}
+
+#[cfg(test)]
+mod focus_target_tests {
+    use super::*;
+
+    #[test]
+    fn default_focus_targets_cover_known_sources() {
+        let targets = default_live_source_focus_targets();
+        for source in ["codex", "claude", "opencode", "openclaw", "hermes"] {
+            assert!(targets.contains_key(source), "missing target for {source}");
+            assert!(validate_focus_target(targets.get(source).unwrap()).is_ok());
+        }
+    }
+
+    #[test]
+    fn live_source_focus_targets_from_settings_uses_defaults() {
+        let settings = AppSettings::default();
+        assert_eq!(
+            live_source_focus_targets_from_settings(&settings),
+            default_live_source_focus_targets()
+        );
+    }
+
+    #[test]
+    fn live_source_focus_targets_from_settings_accepts_override() {
+        let mut settings = AppSettings::default();
+        settings
+            .live_source_focus_targets
+            .insert("codex".to_string(), "app:Warp".to_string());
+        let targets = live_source_focus_targets_from_settings(&settings);
+        assert_eq!(targets.get("codex"), Some(&"app:Warp".to_string()));
+    }
+
+    #[test]
+    fn live_source_focus_targets_from_settings_ignores_invalid_override() {
+        let mut settings = AppSettings::default();
+        settings
+            .live_source_focus_targets
+            .insert("codex".to_string(), "file:/tmp/nope".to_string());
+        let targets = live_source_focus_targets_from_settings(&settings);
+        assert_eq!(targets.get("codex"), Some(&"app:Codex".to_string()));
+    }
+
+    #[test]
+    fn codex_bubble_payload_includes_source() {
+        let payload = codex_bubble_payload("hello", "codex");
+        assert_eq!(payload["text"], "hello");
+        assert_eq!(payload["source"], "codex");
+        assert_eq!(payload["sourceLabel"], "Codex");
+    }
+
+    #[test]
+    fn live_source_enabled_defaults_to_only_codex() {
+        let settings = AppSettings::default();
+        assert!(live_source_enabled_from_settings(&settings, "codex"));
+        for source in ["claude", "opencode", "openclaw", "hermes"] {
+            assert!(!live_source_enabled_from_settings(&settings, source));
+        }
+    }
+
+    #[test]
+    fn live_source_enabled_uses_saved_setting() {
+        let mut settings = AppSettings::default();
+        settings
+            .live_source_enabled
+            .insert("claude".to_string(), true);
+        settings
+            .live_source_enabled
+            .insert("codex".to_string(), false);
+
+        assert!(!live_source_enabled_from_settings(&settings, "codex"));
+        assert!(live_source_enabled_from_settings(&settings, "claude"));
+    }
+}

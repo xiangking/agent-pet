@@ -1,0 +1,6 @@
+{
+  "id": "bsod",
+  "displayName": "BSOD",
+  "description": "A tiny blue-screen gremlin.",
+  "spritesheetPath": "spritesheet.webp"
+}

@@ -1,0 +1,6 @@
+{
+  "id": "rocky",
+  "displayName": "Rocky",
+  "description": "A steady rock when the diff gets large.",
+  "spritesheetPath": "spritesheet.webp"
+}

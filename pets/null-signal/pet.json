@@ -1,0 +1,6 @@
+{
+  "id": "null-signal",
+  "displayName": "Null Signal",
+  "description": "Quiet signal from the void.",
+  "spritesheetPath": "spritesheet.webp"
+}

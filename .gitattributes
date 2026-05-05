@@ -1,0 +1,6 @@
+* text=auto
+
+*.png binary
+*.webp binary
+*.ico binary
+*.icns binary
