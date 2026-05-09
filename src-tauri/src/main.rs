@@ -12,7 +12,8 @@ mod websocket;
 
 use std::sync::Arc;
 use tauri::async_runtime::Mutex;
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
+use tokio_util::sync::CancellationToken;
 
 use crate::codex_monitor::CodexMonitor;
 use crate::state_machine::{
@@ -22,6 +23,7 @@ use crate::websocket::WebSocketServer;
 
 pub struct AppState {
     pub state_machine: Arc<Mutex<PetStateMachine>>,
+    pub cancellation_token: CancellationToken,
 }
 
 #[tauri::command]
@@ -113,8 +115,7 @@ async fn toggle_codex_monitor(
     enabled: bool,
 ) -> Result<(), String> {
     let mut sm = state.state_machine.lock().await;
-    sm.set_codex_monitor_enabled(enabled);
-    Ok(())
+    sm.set_live_source_enabled("codex", enabled)
 }
 
 #[tauri::command]
@@ -162,6 +163,13 @@ async fn get_live_sources_status(
             "defaultPath": defaults.get("hermes"),
             "focusTarget": focus_targets.get("hermes"),
             "defaultFocusTarget": default_focus_targets.get("hermes"),
+        },
+        "antigravity": {
+            "enabled": sm.antigravity_monitor_enabled(),
+            "path": paths.get("antigravity"),
+            "defaultPath": defaults.get("antigravity"),
+            "focusTarget": focus_targets.get("antigravity"),
+            "defaultFocusTarget": default_focus_targets.get("antigravity"),
         },
         "prefixEnabled": sm.live_source_prefix_enabled(),
     }))
@@ -277,10 +285,12 @@ fn main() {
 
             // Initialize state machine
             let state_machine = Arc::new(Mutex::new(PetStateMachine::new(app_handle.clone())));
+            let cancellation_token = CancellationToken::new();
 
             // Store app state
             app.manage(AppState {
                 state_machine: state_machine.clone(),
+                cancellation_token: cancellation_token.clone(),
             });
 
             // Setup system tray
@@ -298,8 +308,9 @@ fn main() {
 
             // Spawn WebSocket server
             let sm_clone = state_machine.clone();
+            let ws_cancel = cancellation_token.clone();
             tauri::async_runtime::spawn(async move {
-                let server = WebSocketServer::new(8765, sm_clone);
+                let server = WebSocketServer::new(8765, sm_clone, ws_cancel);
                 if let Err(e) = server.run().await {
                     log::error!("WebSocket server error: {}", e);
                 }
@@ -307,12 +318,23 @@ fn main() {
 
             // Mirror live Codex session activity into pet animations.
             let codex_sm = state_machine.clone();
+            let monitor_cancel = cancellation_token.clone();
             tauri::async_runtime::spawn(async move {
-                let monitor = CodexMonitor::new(codex_sm);
+                let monitor = CodexMonitor::new(codex_sm, monitor_cancel);
                 monitor.run().await;
             });
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::Destroyed) {
+                let app = window.app_handle();
+                if app.webview_windows().is_empty() {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        state.cancellation_token.cancel();
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_pet_list,

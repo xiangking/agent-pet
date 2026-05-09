@@ -10,7 +10,7 @@ It is built with Tauri v2, Rust, React, and Vite.
 
 - Codex-compatible pet sprites: `1536x1872`, `8x9` atlas, `192x208` cells.
 - Built-in WebSocket endpoint at `ws://127.0.0.1:8765`.
-- Local activity monitoring for Codex CLI, Claude Code, opencode, OpenClaw, and Hermes Agent.
+- Local activity monitoring for Codex CLI, Claude Code, opencode, OpenClaw, Hermes Agent, and Antigravity.
 - Customizable source paths and optional source prefixes.
 - Custom pet support through a user pet directory.
 - Floating transparent desktop window, settings window, system tray, drag movement, and pet size presets.
@@ -215,8 +215,10 @@ Agent Pet can watch local activity files from:
 - opencode
 - OpenClaw
 - Hermes Agent
+- Antigravity
 
 The paths are configurable in Settings. Source prefixes are optional and disabled by default, so assistant replies can appear as clean pet bubbles.
+The default Antigravity path is `~/.gemini/antigravity`; change it in Settings if your installation stores conversations elsewhere.
 
 The app is designed to ignore user-authored messages where the source format makes the role clear, and show assistant/tool activity instead.
 

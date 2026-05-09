@@ -4,60 +4,18 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { t as translate } from './locales'
-
-// Codex pet protocol constants
-const CELL_WIDTH = 192
-const CELL_HEIGHT = 208
-const ATLAS_WIDTH = 1536
-const ATLAS_HEIGHT = 1872
-const MIN_WINDOW_WIDTH = 240
-const BUBBLE_SPACE_HEIGHT = 92
-const CODEX_ORIGINAL_SCALE = 0.45
-const DEFAULT_PET_SCALE = CODEX_ORIGINAL_SCALE
-const PET_SCALE_OPTIONS = [
-  { labelKey: 'sizeSmall', value: CODEX_ORIGINAL_SCALE * 0.75, percent: 75 },
-  { labelKey: 'sizeOriginal', value: CODEX_ORIGINAL_SCALE, percent: 100 },
-  { labelKey: 'sizeLarge', value: CODEX_ORIGINAL_SCALE * 1.25, percent: 125 },
-  { labelKey: 'sizeXl', value: CODEX_ORIGINAL_SCALE * 1.5, percent: 150 },
-]
-const LIVE_SOURCES = [
-  { key: 'codex', label: 'Codex' },
-  { key: 'claude', label: 'Claude Code' },
-  { key: 'opencode', label: 'opencode' },
-  { key: 'openclaw', label: 'OpenClaw' },
-  { key: 'hermes', label: 'Hermes Agent' },
-]
-const EMPTY_LIVE_SOURCE_STATUS = {
-  enabled: true,
-  path: '',
-  defaultPath: '',
-  focusTarget: '',
-  defaultFocusTarget: '',
-}
-const STATE_ROWS = {
-  idle: 0,
-  'running-right': 1,
-  'running-left': 2,
-  waving: 3,
-  jumping: 4,
-  failed: 5,
-  waiting: 6,
-  running: 7,
-  review: 8,
-}
-
-const FRAME_COUNTS = {
-  idle: 6,
-  'running-right': 8,
-  'running-left': 8,
-  waving: 4,
-  jumping: 5,
-  failed: 8,
-  waiting: 6,
-  running: 6,
-  review: 6,
-}
-
+import PetWindow from './PetWindow'
+import SettingsWindow from './SettingsWindow'
+import {
+  BUBBLE_SPACE_HEIGHT,
+  CELL_HEIGHT,
+  CELL_WIDTH,
+  DEFAULT_PET_SCALE,
+  EMPTY_LIVE_SOURCE_STATUS,
+  FRAME_COUNTS,
+  MIN_WINDOW_WIDTH,
+  STATE_ROWS,
+} from './constants'
 const getSpritesheetSource = (petConfig) => {
   return petConfig?.spritesheetDataUrl || petConfig?.spritesheet_data_url || ''
 }
@@ -76,6 +34,7 @@ function App() {
     opencode: { ...EMPTY_LIVE_SOURCE_STATUS },
     openclaw: { ...EMPTY_LIVE_SOURCE_STATUS },
     hermes: { ...EMPTY_LIVE_SOURCE_STATUS },
+    antigravity: { ...EMPTY_LIVE_SOURCE_STATUS },
   })
   const [liveSourcePrefixEnabled, setLiveSourcePrefixEnabled] = useState(false)
   const [petScale, setPetScale] = useState(DEFAULT_PET_SCALE)
@@ -324,6 +283,7 @@ function App() {
         opencode: { ...EMPTY_LIVE_SOURCE_STATUS, ...(status.opencode || {}) },
         openclaw: { ...EMPTY_LIVE_SOURCE_STATUS, ...(status.openclaw || {}) },
         hermes: { ...EMPTY_LIVE_SOURCE_STATUS, ...(status.hermes || {}) },
+        antigravity: { ...EMPTY_LIVE_SOURCE_STATUS, ...(status.antigravity || {}) },
       })
     } catch (e) {
       console.error('Failed to load live source status:', e)
@@ -501,257 +461,51 @@ function App() {
     }
   }
 
-  // Pet window
   if (!isSettings) {
     return (
-      <div 
-        className="pet-container"
-        data-tauri-drag-region
-        style={{ width: windowWidth, height: windowHeight, '--pet-display-height': `${displayHeight}px` }}
-        onMouseDown={handlePetMouseDown}
-        onClick={() => handleTrigger('jumping')}
-      >
-        {bubble?.text && (
-          <div
-            className={`pet-bubble ${bubble.source ? 'clickable' : ''}`}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={handleBubbleClick}
-            title={bubble.sourceLabel || bubble.source}
-          >
-            {bubble.text}
-          </div>
-        )}
-        {spritesheet ? (
-          <div
-            className="pet-sprite"
-            style={{
-              backgroundImage: `url(${spritesheet})`,
-              backgroundPosition: getBackgroundPosition(),
-              backgroundSize: `${ATLAS_WIDTH * petScale}px ${ATLAS_HEIGHT * petScale}px`,
-              width: displayWidth,
-              height: displayHeight,
-            }}
-          />
-        ) : (
-          <div style={{ 
-            width: displayWidth, 
-            height: displayHeight, 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            color: '#666',
-            fontSize: 12,
-          }}>
-            {t('noLoaded')}
-          </div>
-        )}
-      </div>
+      <PetWindow
+        bubble={bubble}
+        currentState={currentState}
+        currentFrame={currentFrame}
+        displayHeight={displayHeight}
+        displayWidth={displayWidth}
+        getBackgroundPosition={getBackgroundPosition}
+        handleBubbleClick={handleBubbleClick}
+        handlePetMouseDown={handlePetMouseDown}
+        handleTrigger={handleTrigger}
+        petScale={petScale}
+        spritesheet={spritesheet}
+        t={t}
+        windowHeight={windowHeight}
+        windowWidth={windowWidth}
+      />
     )
   }
 
-  // Settings window
   return (
-    <div className="settings-container">
-      <div className="settings-shell">
-        <header className="settings-header">
-          <div className="settings-title-row">
-            <h1>{t('title')}</h1>
-            <button className="button button-ghost language-toggle" onClick={handleToggleLanguage}>
-              {locale === 'en' ? '中文' : 'EN'}
-            </button>
-          </div>
-        </header>
-
-        <main className="settings-grid">
-          <section className="settings-section pets-section">
-            <div className="section-heading">
-              <h2>{t('pets')}</h2>
-              <span className="count-pill">{pets.length}</span>
-            </div>
-            <div className="pet-list">
-              {pets.map((pet) => (
-                <button
-                  key={pet.id}
-                  type="button"
-                  className={`pet-item ${pet.has_spritesheet ? '' : 'disabled'}`}
-                  onClick={() => pet.has_spritesheet && handleLoadPet(pet.id)}
-                >
-                  <span className="pet-avatar">{pet.display_name.slice(0, 1)}</span>
-                  <span className="pet-item-info">
-                    <span className="pet-item-name">{pet.display_name}</span>
-                    <span className="pet-item-desc">{pet.description}</span>
-                  </span>
-                  {!pet.has_spritesheet && (
-                    <span className="status-badge disconnected">{t('missingSprite')}</span>
-                  )}
-                </button>
-              ))}
-              {pets.length === 0 && (
-                <div className="empty-state">
-                  {t('noPets', { dir: userPetDir || t('userPetDirectory') })}
-                </div>
-              )}
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <div className="section-heading">
-              <h2>{t('wsServer')}</h2>
-              <span className={`status-badge ${wsStatus.enabled ? 'connected' : 'disconnected'}`}>
-                {wsStatus.enabled ? t('enabled') : t('disabled')}
-              </span>
-            </div>
-            <div className="metric-row">
-              <span>{t('port')}</span>
-              <strong>{wsStatus.port}</strong>
-            </div>
-            <button className="button button-primary" onClick={handleToggleWs}>
-              {wsStatus.enabled ? t('disable') : t('enable')}
-            </button>
-            <div className="helper-text">
-              {t('connectTo', { port: wsStatus.port })}
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <div className="section-heading">
-              <h2>{t('petSize')}</h2>
-            </div>
-            <div className="segmented-options">
-              {PET_SCALE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`segment-button ${Math.abs(petScale - option.value) < 0.01 ? 'selected' : ''}`}
-                  onClick={() => handleSetPetScale(option.value)}
-                >
-                  <span>{t(option.labelKey)}</span>
-                  <strong>{option.percent}%</strong>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="settings-section live-section">
-            <div className="section-heading">
-              <h2>{t('liveSources')}</h2>
-              <div className="heading-actions">
-                <span className={`status-badge ${liveSourcePrefixEnabled ? 'connected' : 'disconnected'}`}>
-                  {liveSourcePrefixEnabled ? t('prefixOn') : t('prefixOff')}
-                </span>
-                <button className="button button-ghost" onClick={handleToggleLiveSourcePrefix}>
-                  {liveSourcePrefixEnabled ? t('hidePrefix') : t('showPrefix')}
-                </button>
-              </div>
-            </div>
-            <div className="live-sources">
-              {LIVE_SOURCES.map((source) => {
-                const status = liveSourcesStatus[source.key]
-                const enabled = Boolean(status.enabled)
-                const defaultPath = status.defaultPath || ''
-                const path = status.path || defaultPath
-                const defaultFocusTarget = status.defaultFocusTarget || ''
-                const focusTarget = status.focusTarget || defaultFocusTarget
-
-                return (
-                  <div key={source.key} className="live-source-item">
-                    <div className="live-source-main">
-                      <div className="live-source-name">{source.label}</div>
-                      <div className="live-source-path">{t('defaultLabel')} {defaultPath || t('loading')}</div>
-                    </div>
-                    <div className="live-source-path-field field-stack">
-                      <label className="field-label">{t('defaultLabel')}</label>
-                      <input
-                        type="text"
-                        value={path}
-                        onChange={(e) => handleChangeLiveSourcePath(source.key, e.target.value)}
-                      />
-                      <label className="field-label">{t('focusTarget')}</label>
-                      <input
-                        type="text"
-                        value={focusTarget}
-                        placeholder={t('focusTargetHint')}
-                        onChange={(e) => handleChangeLiveSourceFocusTarget(source.key, e.target.value)}
-                      />
-                    </div>
-                    <div className="live-source-actions">
-                      <span className={`status-badge ${enabled ? 'connected' : 'disconnected'}`}>
-                        {enabled ? t('enabled') : t('disabled')}
-                      </span>
-                      <button className="button button-ghost" onClick={() => handleToggleLiveSource(source.key)}>
-                        {enabled ? t('disable') : t('enable')}
-                      </button>
-                      <button className="button button-ghost" onClick={() => handleResetLiveSourcePath(source.key)}>
-                        {t('reset')}
-                      </button>
-                      <button className="button button-primary" onClick={() => handleSaveLiveSourcePath(source.key)}>
-                        {t('save')}
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </section>
-
-          <section className="settings-section message-section">
-            <div className="section-heading">
-              <h2>{t('messageMapping')}</h2>
-            </div>
-            <div className="message-map">
-              {Object.entries(messageMap).map(([msgType, state]) => (
-                <div key={msgType} className="message-map-item">
-                  <label>{msgType}</label>
-                  <select
-                    value={state}
-                    onChange={(e) => handleUpdateMessageMap(msgType, e.target.value)}
-                  >
-                    {Object.keys(STATE_ROWS).map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="settings-section test-section">
-            <div className="section-heading">
-              <h2>{t('test')}</h2>
-            </div>
-            <div className="test-actions">
-              {Object.keys(STATE_ROWS).map((state) => (
-                <button className="button button-ghost" key={state} onClick={() => handleTrigger(state)}>
-                  {state}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="settings-section directory-section">
-            <div className="section-heading">
-              <h2>{t('petDirectory')}</h2>
-            </div>
-            <div className="directory-row">
-              <strong>{t('userPets')}</strong>
-              <code>{userPetDir || t('loading')}</code>
-            </div>
-            <div className="directory-row">
-              <strong>{t('builtInPets')}</strong>
-              <code>{`{project}/pets/`}</code>
-            </div>
-            <div className="helper-text">
-              {t('petFolderHint').split('\n').map((line) => (
-                <span key={line}>
-                  {line}
-                  <br />
-                </span>
-              ))}
-            </div>
-          </section>
-        </main>
-      </div>
-    </div>
+    <SettingsWindow
+      handleChangeLiveSourceFocusTarget={handleChangeLiveSourceFocusTarget}
+      handleChangeLiveSourcePath={handleChangeLiveSourcePath}
+      handleLoadPet={handleLoadPet}
+      handleResetLiveSourcePath={handleResetLiveSourcePath}
+      handleSaveLiveSourcePath={handleSaveLiveSourcePath}
+      handleSetPetScale={handleSetPetScale}
+      handleToggleLanguage={handleToggleLanguage}
+      handleToggleLiveSource={handleToggleLiveSource}
+      handleToggleLiveSourcePrefix={handleToggleLiveSourcePrefix}
+      handleToggleWs={handleToggleWs}
+      handleTrigger={handleTrigger}
+      handleUpdateMessageMap={handleUpdateMessageMap}
+      liveSourcePrefixEnabled={liveSourcePrefixEnabled}
+      liveSourcesStatus={liveSourcesStatus}
+      locale={locale}
+      messageMap={messageMap}
+      pets={pets}
+      petScale={petScale}
+      t={t}
+      userPetDir={userPetDir}
+      wsStatus={wsStatus}
+    />
   )
 }
 

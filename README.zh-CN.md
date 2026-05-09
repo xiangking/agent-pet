@@ -10,7 +10,7 @@ Agent Pet 是一个轻量级 AI Agent 桌面宠物。它会悬浮在桌面上，
 
 - 兼容 Codex pet spritesheet：`1536x1872`、`8x9` 图集、单格 `192x208`。
 - 内置 WebSocket 地址：`ws://127.0.0.1:8765`。
-- 支持监听 Codex CLI、Claude Code、opencode、OpenClaw、Hermes Agent 的本地活动。
+- 支持监听 Codex CLI、Claude Code、opencode、OpenClaw、Hermes Agent、Antigravity 的本地活动。
 - 支持自定义监听路径，支持可选的软件来源前缀。
 - 支持用户自定义 pet。
 - 透明悬浮桌面窗口、设置窗口、系统托盘、拖动移动、精灵尺寸选项。
@@ -215,8 +215,10 @@ Agent Pet 可以监听这些工具的本地活动文件：
 - opencode
 - OpenClaw
 - Hermes Agent
+- Antigravity
 
 监听路径可以在 Settings 里配置。软件来源前缀是可选项，并且默认关闭，所以助手回复可以以更干净的气泡展示。
+Antigravity 默认监听路径是 `~/.gemini/antigravity`；如果你的安装位置不同，可以在 Settings 里修改。
 
 在来源格式能够明确区分角色时，应用会尽量忽略用户自己发送的消息，只展示助手回复或工具活动。
 

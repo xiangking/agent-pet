@@ -12,6 +12,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tauri::async_runtime::Mutex;
+use tokio_util::sync::CancellationToken;
 
 struct CodexActivity {
     message_type: &'static str,
@@ -27,11 +28,18 @@ enum ActivityOrigin {
 
 pub struct CodexMonitor {
     state_machine: Arc<Mutex<PetStateMachine>>,
+    cancellation_token: CancellationToken,
 }
 
 impl CodexMonitor {
-    pub fn new(state_machine: Arc<Mutex<PetStateMachine>>) -> Self {
-        Self { state_machine }
+    pub fn new(
+        state_machine: Arc<Mutex<PetStateMachine>>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        Self {
+            state_machine,
+            cancellation_token,
+        }
     }
 
     pub async fn run(&self) {
@@ -40,16 +48,26 @@ impl CodexMonitor {
         let mut opencode_cursor = OpencodeCursor::default();
         let mut openclaw_cursor = FileCursor::default();
         let mut hermes_cursor = FileCursor::default();
+        let mut antigravity_conversation_cursor = BinaryFileCursor::default();
+        let mut antigravity_brain_cursor = MetadataCursor::default();
 
-        loop {
-            let (codex_path, claude_path, opencode_path, openclaw_path, hermes_path) = {
+        while !self.cancellation_token.is_cancelled() {
+            let (
+                codex_path,
+                claude_path,
+                opencode_path,
+                openclaw_path,
+                hermes_path,
+                antigravity_path,
+            ) = {
                 let sm = self.state_machine.lock().await;
                 (
-                    expand_source_path(sm.live_source_path("codex")),
-                    expand_source_path(sm.live_source_path("claude")),
-                    expand_source_path(sm.live_source_path("opencode")),
-                    expand_source_path(sm.live_source_path("openclaw")),
-                    expand_source_path(sm.live_source_path("hermes")),
+                    enabled_source_path(&sm, "codex"),
+                    enabled_source_path(&sm, "claude"),
+                    enabled_source_path(&sm, "opencode"),
+                    enabled_source_path(&sm, "openclaw"),
+                    enabled_source_path(&sm, "hermes"),
+                    enabled_source_path(&sm, "antigravity"),
                 )
             };
 
@@ -121,8 +139,32 @@ impl CodexMonitor {
                 }
             }
 
-            tokio::time::sleep(Duration::from_millis(700)).await;
+            if let Some(root) = antigravity_path.as_deref() {
+                if let Err(e) = poll_antigravity_source(
+                    root,
+                    &mut antigravity_conversation_cursor,
+                    &mut antigravity_brain_cursor,
+                    &self.state_machine,
+                )
+                .await
+                {
+                    log::warn!("Antigravity monitor poll failed: {}", e);
+                }
+            }
+
+            tokio::select! {
+                _ = self.cancellation_token.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_millis(700)) => {}
+            }
         }
+    }
+}
+
+fn enabled_source_path(sm: &PetStateMachine, source: &str) -> Option<PathBuf> {
+    if sm.live_source_enabled(source) {
+        expand_source_path(sm.live_source_path(source))
+    } else {
+        None
     }
 }
 
@@ -135,6 +177,19 @@ struct FileCursor {
 #[derive(Default)]
 struct OpencodeCursor {
     last_time_created: i64,
+    initialized: bool,
+}
+
+#[derive(Default)]
+struct BinaryFileCursor {
+    path: Option<PathBuf>,
+    modified: Option<SystemTime>,
+    initialized: bool,
+}
+
+#[derive(Default)]
+struct MetadataCursor {
+    newest_modified: Option<SystemTime>,
     initialized: bool,
 }
 
@@ -162,8 +217,7 @@ async fn poll_jsonl_source(
 
     let len = fs::metadata(&path)?.len();
     if len < cursor.offset {
-        cursor.offset = len;
-        return Ok(());
+        cursor.offset = 0;
     }
     if len == cursor.offset {
         return Ok(());
@@ -256,6 +310,50 @@ fn expand_env_vars(path: &str) -> String {
             continue;
         }
 
+        if ch == '$' {
+            if chars.peek() == Some(&'{') {
+                chars.next();
+                let mut name = String::new();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next == '}' {
+                        break;
+                    }
+                    name.push(next);
+                }
+
+                if name.is_empty() {
+                    output.push_str("${}");
+                } else if let Ok(value) = std::env::var(&name) {
+                    output.push_str(&value);
+                } else {
+                    output.push_str("${");
+                    output.push_str(&name);
+                    output.push('}');
+                }
+                continue;
+            }
+
+            let mut name = String::new();
+            while let Some(&next) = chars.peek() {
+                if !(next == '_' || next.is_ascii_alphanumeric()) {
+                    break;
+                }
+                chars.next();
+                name.push(next);
+            }
+
+            if name.is_empty() {
+                output.push(ch);
+            } else if let Ok(value) = std::env::var(&name) {
+                output.push_str(&value);
+            } else {
+                output.push(ch);
+                output.push_str(&name);
+            }
+            continue;
+        }
+
         output.push(ch);
     }
 
@@ -266,9 +364,28 @@ fn newest_jsonl_file(
     root: &Path,
     file_filter: fn(&Path) -> bool,
 ) -> Result<Option<PathBuf>, std::io::Error> {
+    Ok(newest_file_with_modified(root, file_filter)?.map(|(path, _)| path))
+}
+
+fn newest_file(
+    root: &Path,
+    file_filter: fn(&Path) -> bool,
+) -> Result<Option<PathBuf>, std::io::Error> {
+    Ok(newest_file_with_modified(root, file_filter)?.map(|(path, _)| path))
+}
+
+fn newest_file_with_modified(
+    root: &Path,
+    file_filter: fn(&Path) -> bool,
+) -> Result<Option<(PathBuf, SystemTime)>, std::io::Error> {
     if root.is_file() {
         return Ok(if file_filter(root) {
-            Some(root.to_path_buf())
+            Some((
+                root.to_path_buf(),
+                fs::metadata(root)?
+                    .modified()
+                    .unwrap_or(SystemTime::UNIX_EPOCH),
+            ))
         } else {
             None
         });
@@ -307,7 +424,7 @@ fn newest_jsonl_file(
         }
     }
 
-    Ok(newest.map(|(path, _)| path))
+    Ok(newest)
 }
 
 fn is_codex_session_file(path: &Path) -> bool {
@@ -332,6 +449,32 @@ fn is_openclaw_session_file(path: &Path) -> bool {
 
 fn is_hermes_session_file(path: &Path) -> bool {
     path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+}
+
+fn is_antigravity_conversation_file(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("pb")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("conversations")
+}
+
+fn is_antigravity_brain_metadata_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    matches!(
+        name,
+        "task.md.metadata.json"
+            | "implementation_plan.md.metadata.json"
+            | "audit_report.md.metadata.json"
+            | "code_review.md.metadata.json"
+            | "changes_diff.md.metadata.json"
+    ) && path
+        .components()
+        .any(|component| component.as_os_str() == "brain")
 }
 
 #[cfg(test)]
@@ -571,6 +714,96 @@ fn hermes_line_to_activity(line: &str) -> Option<CodexActivity> {
     }
 }
 
+async fn poll_antigravity_source(
+    root: &Path,
+    conversation_cursor: &mut BinaryFileCursor,
+    brain_cursor: &mut MetadataCursor,
+    state_machine: &Arc<Mutex<PetStateMachine>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conversations_root = root.join("conversations");
+    if conversations_root.exists() {
+        poll_antigravity_conversation(&conversations_root, conversation_cursor, state_machine)
+            .await?;
+    }
+
+    let brain_root = root.join("brain");
+    if brain_root.exists() {
+        poll_antigravity_brain_metadata(&brain_root, brain_cursor, state_machine).await?;
+    }
+
+    Ok(())
+}
+
+async fn poll_antigravity_conversation(
+    root: &Path,
+    cursor: &mut BinaryFileCursor,
+    state_machine: &Arc<Mutex<PetStateMachine>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(path) = newest_file(root, is_antigravity_conversation_file)? else {
+        return Ok(());
+    };
+    let modified = fs::metadata(&path)?
+        .modified()
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    if !cursor.initialized {
+        cursor.path = Some(path);
+        cursor.modified = Some(modified);
+        cursor.initialized = true;
+        return Ok(());
+    }
+
+    if cursor.path.as_ref() == Some(&path) && cursor.modified == Some(modified) {
+        return Ok(());
+    }
+
+    cursor.path = Some(path.clone());
+    cursor.modified = Some(modified);
+
+    let data = fs::read(&path)?;
+    let activity = antigravity_blob_to_activity(&data)
+        .or_else(|| Some(activity(MSG_PROCESSING, "Working...")));
+    if let Some(activity) = activity {
+        emit_activity(state_machine, "antigravity", activity).await;
+    }
+
+    Ok(())
+}
+
+async fn poll_antigravity_brain_metadata(
+    root: &Path,
+    cursor: &mut MetadataCursor,
+    state_machine: &Arc<Mutex<PetStateMachine>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some((path, modified)) =
+        newest_file_with_modified(root, is_antigravity_brain_metadata_file)?
+    else {
+        return Ok(());
+    };
+
+    if !cursor.initialized {
+        cursor.newest_modified = Some(modified);
+        cursor.initialized = true;
+        return Ok(());
+    }
+
+    if cursor
+        .newest_modified
+        .map(|current| modified <= current)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    cursor.newest_modified = Some(modified);
+
+    if let Some(activity) = antigravity_metadata_to_activity(&path) {
+        emit_activity(state_machine, "antigravity", activity).await;
+    }
+
+    Ok(())
+}
+
 async fn poll_opencode_source(
     db_path: &Path,
     cursor: &mut OpencodeCursor,
@@ -641,6 +874,10 @@ fn run_opencode_query(
         return Err(format!("sqlite3 failed: {}", stderr).into());
     }
 
+    if output.stdout.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Vec::new());
+    }
+
     let value: Value = serde_json::from_slice(&output.stdout)?;
     let rows = value
         .as_array()
@@ -703,6 +940,142 @@ fn opencode_row_to_activity(row: &OpencodeRow) -> Option<CodexActivity> {
                 _ => Some(activity(MSG_PROCESSING, "Using tool...")),
             }
         }
+        _ => None,
+    }
+}
+
+fn antigravity_blob_to_activity(data: &[u8]) -> Option<CodexActivity> {
+    let fragments = printable_fragments(data);
+    antigravity_fragments_to_activity(&fragments)
+}
+
+fn antigravity_fragments_to_activity(fragments: &[String]) -> Option<CodexActivity> {
+    let lowered = fragments
+        .iter()
+        .map(|fragment| fragment.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let has_user_marker = lowered.iter().any(|fragment| {
+        fragment.contains("user")
+            || fragment.contains("human")
+            || fragment.contains("prompt")
+            || fragment.contains("request")
+    });
+    let has_assistant_marker = lowered.iter().any(|fragment| {
+        fragment.contains("assistant") || fragment.contains("agent") || fragment.contains("model")
+    });
+
+    if lowered.iter().any(|fragment| {
+        fragment.contains("error")
+            || fragment.contains("failed")
+            || fragment.contains("failure")
+            || fragment.contains("exception")
+    }) {
+        return Some(CodexActivity {
+            message_type: MSG_ERROR,
+            bubble_text: Some("Something failed".to_string()),
+            origin: ActivityOrigin::Assistant,
+        });
+    }
+
+    if has_user_marker && !has_assistant_marker {
+        return Some(CodexActivity {
+            message_type: MSG_MENTION,
+            bubble_text: antigravity_candidate_text(fragments)
+                .or_else(|| Some("New request".to_string())),
+            origin: ActivityOrigin::User,
+        });
+    }
+
+    if has_assistant_marker
+        || lowered.iter().any(|fragment| {
+            fragment.contains("tool")
+                || fragment.contains("thinking")
+                || fragment.contains("running")
+        })
+    {
+        return Some(activity(MSG_PROCESSING, "Working..."));
+    }
+
+    None
+}
+
+fn antigravity_candidate_text(fragments: &[String]) -> Option<String> {
+    fragments
+        .iter()
+        .filter_map(|fragment| {
+            let text = clean_antigravity_fragment(fragment);
+            if is_antigravity_text_candidate(&text) {
+                Some(text)
+            } else {
+                None
+            }
+        })
+        .max_by_key(|text| text.len())
+        .map(|text| truncate_bubble_text(text.trim()))
+}
+
+fn clean_antigravity_fragment(fragment: &str) -> String {
+    let text = fragment
+        .replace("\\n", " ")
+        .replace("\\t", " ")
+        .replace('\n', " ");
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_antigravity_text_candidate(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.len() < 12 {
+        return false;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.ends_with(".md.metadata.json")
+        || lowered.ends_with(".pb")
+        || lowered.starts_with("uuid")
+        || lowered.starts_with("file://")
+        || lowered.contains("/.gemini/antigravity/")
+    {
+        return false;
+    }
+
+    trimmed.chars().any(|ch| ch.is_whitespace()) || trimmed.contains(['.', ',', ':', ';'])
+}
+
+fn printable_fragments(data: &[u8]) -> Vec<String> {
+    let mut fragments = Vec::new();
+    let mut current = Vec::new();
+
+    for &byte in data {
+        if byte.is_ascii_graphic() || byte == b' ' || byte == b'\n' || byte == b'\t' {
+            current.push(byte);
+            continue;
+        }
+
+        push_printable_fragment(&mut fragments, &mut current);
+    }
+
+    push_printable_fragment(&mut fragments, &mut current);
+    fragments
+}
+
+fn push_printable_fragment(fragments: &mut Vec<String>, current: &mut Vec<u8>) {
+    if current.len() >= 4 {
+        if let Ok(text) = String::from_utf8(std::mem::take(current)) {
+            fragments.push(text);
+            return;
+        }
+    }
+
+    current.clear();
+}
+
+fn antigravity_metadata_to_activity(path: &Path) -> Option<CodexActivity> {
+    match path.file_name().and_then(|name| name.to_str())? {
+        "implementation_plan.md.metadata.json"
+        | "audit_report.md.metadata.json"
+        | "code_review.md.metadata.json"
+        | "changes_diff.md.metadata.json" => Some(activity(MSG_SUCCESS, "Updated")),
+        "task.md.metadata.json" => Some(activity(MSG_PROCESSING, "Working...")),
         _ => None,
     }
 }
@@ -781,6 +1154,7 @@ fn source_label(source: &str) -> &str {
         "opencode" => "opencode",
         "openclaw" => "OpenClaw",
         "hermes" => "Hermes Agent",
+        "antigravity" => "Antigravity",
         _ => source,
     }
 }
@@ -952,5 +1326,85 @@ mod tests {
         assert_eq!(activity.bubble_text.as_deref(), Some("Working..."));
         assert_eq!(activity.origin, ActivityOrigin::Assistant);
         assert!(hermes_line_to_activity(mirror_line).is_none());
+    }
+
+    #[test]
+    fn antigravity_conversation_filter_requires_conversations_pb() {
+        assert!(is_antigravity_conversation_file(Path::new(
+            "/tmp/antigravity/conversations/session.pb"
+        )));
+        assert!(!is_antigravity_conversation_file(Path::new(
+            "/tmp/antigravity/implicit/session.pb"
+        )));
+        assert!(!is_antigravity_conversation_file(Path::new(
+            "/tmp/antigravity/conversations/session.json"
+        )));
+    }
+
+    #[test]
+    fn antigravity_extracts_assistant_text_from_blob() {
+        let blob =
+            b"\0assistant\0I checked the project and updated the implementation plan for you.\0";
+        let activity = antigravity_blob_to_activity(blob).unwrap();
+        assert_eq!(activity.message_type, MSG_PROCESSING);
+        assert_eq!(activity.bubble_text.as_deref(), Some("Working..."));
+        assert_eq!(activity.origin, ActivityOrigin::Assistant);
+    }
+
+    #[test]
+    fn antigravity_user_only_blob_is_ignored_by_emit_path() {
+        let blob = b"\0user\0Please inspect the current project configuration.\0";
+        let activity = antigravity_blob_to_activity(blob).unwrap();
+        assert_eq!(activity.message_type, MSG_MENTION);
+        assert_eq!(activity.origin, ActivityOrigin::User);
+    }
+
+    #[test]
+    fn antigravity_maps_error_blob_to_error() {
+        let blob = b"\0assistant\0The command failed with an exception while running tests.\0";
+        let activity = antigravity_blob_to_activity(blob).unwrap();
+        assert_eq!(activity.message_type, MSG_ERROR);
+        assert_eq!(activity.bubble_text.as_deref(), Some("Something failed"));
+        assert_eq!(activity.origin, ActivityOrigin::Assistant);
+    }
+
+    #[test]
+    fn antigravity_brain_metadata_filter_accepts_known_files() {
+        assert!(is_antigravity_brain_metadata_file(Path::new(
+            "/tmp/antigravity/brain/session/task.md.metadata.json"
+        )));
+        assert!(is_antigravity_brain_metadata_file(Path::new(
+            "/tmp/antigravity/brain/session/implementation_plan.md.metadata.json"
+        )));
+        assert!(!is_antigravity_brain_metadata_file(Path::new(
+            "/tmp/antigravity/conversations/task.md.metadata.json"
+        )));
+    }
+
+    #[test]
+    fn expands_unix_style_environment_variables() {
+        std::env::set_var("AGENT_PET_TEST_DIR", "/tmp/agent-pet");
+        assert_eq!(
+            expand_env_vars("$AGENT_PET_TEST_DIR/sessions"),
+            "/tmp/agent-pet/sessions"
+        );
+        assert_eq!(
+            expand_env_vars("${AGENT_PET_TEST_DIR}/sessions"),
+            "/tmp/agent-pet/sessions"
+        );
+        std::env::remove_var("AGENT_PET_TEST_DIR");
+    }
+
+    #[test]
+    fn preserves_unknown_environment_variables() {
+        std::env::remove_var("AGENT_PET_UNKNOWN_DIR");
+        assert_eq!(
+            expand_env_vars("$AGENT_PET_UNKNOWN_DIR/sessions"),
+            "$AGENT_PET_UNKNOWN_DIR/sessions"
+        );
+        assert_eq!(
+            expand_env_vars("${AGENT_PET_UNKNOWN_DIR}/sessions"),
+            "${AGENT_PET_UNKNOWN_DIR}/sessions"
+        );
     }
 }
