@@ -29,6 +29,7 @@ pub struct PetStateMachine {
     opencode_monitor_enabled: bool,
     openclaw_monitor_enabled: bool,
     hermes_monitor_enabled: bool,
+    antigravity_monitor_enabled: bool,
     live_source_paths: HashMap<String, String>,
     live_source_focus_targets: HashMap<String, String>,
     live_source_prefix_enabled: bool,
@@ -52,6 +53,10 @@ impl PetStateMachine {
             opencode_monitor_enabled: live_source_enabled_from_settings(&settings, "opencode"),
             openclaw_monitor_enabled: live_source_enabled_from_settings(&settings, "openclaw"),
             hermes_monitor_enabled: live_source_enabled_from_settings(&settings, "hermes"),
+            antigravity_monitor_enabled: live_source_enabled_from_settings(
+                &settings,
+                "antigravity",
+            ),
             live_source_paths: live_source_paths_from_settings(&settings),
             live_source_focus_targets: live_source_focus_targets_from_settings(&settings),
             live_source_prefix_enabled: settings.live_source_prefix_enabled,
@@ -108,6 +113,10 @@ impl PetStateMachine {
         self.hermes_monitor_enabled
     }
 
+    pub fn antigravity_monitor_enabled(&self) -> bool {
+        self.antigravity_monitor_enabled
+    }
+
     pub fn live_source_enabled(&self, source: &str) -> bool {
         match source {
             "codex" => self.codex_monitor_enabled,
@@ -115,6 +124,7 @@ impl PetStateMachine {
             "opencode" => self.opencode_monitor_enabled,
             "openclaw" => self.openclaw_monitor_enabled,
             "hermes" => self.hermes_monitor_enabled,
+            "antigravity" => self.antigravity_monitor_enabled,
             _ => false,
         }
     }
@@ -139,6 +149,10 @@ impl PetStateMachine {
             }
             "hermes" => {
                 self.hermes_monitor_enabled = enabled;
+                true
+            }
+            "antigravity" => {
+                self.antigravity_monitor_enabled = enabled;
                 true
             }
             _ => false,
@@ -333,6 +347,7 @@ impl PetStateMachine {
                 ("opencode".to_string(), self.opencode_monitor_enabled),
                 ("openclaw".to_string(), self.openclaw_monitor_enabled),
                 ("hermes".to_string(), self.hermes_monitor_enabled),
+                ("antigravity".to_string(), self.antigravity_monitor_enabled),
             ]),
             live_source_prefix_enabled: self.live_source_prefix_enabled,
             language: self.language.clone(),
@@ -358,6 +373,10 @@ pub fn default_live_source_paths() -> HashMap<String, String> {
         ("opencode".to_string(), default_opencode_path()),
         ("openclaw".to_string(), home_path([".openclaw", "agents"])),
         ("hermes".to_string(), home_path([".hermes", "sessions"])),
+        (
+            "antigravity".to_string(),
+            home_path([".gemini", "antigravity"]),
+        ),
     ])
 }
 
@@ -371,6 +390,7 @@ pub fn default_live_source_focus_targets() -> HashMap<String, String> {
             "url:http://127.0.0.1:18789/".to_string(),
         ),
         ("hermes".to_string(), "app:Terminal".to_string()),
+        ("antigravity".to_string(), "app:Antigravity".to_string()),
     ])
 }
 
@@ -410,7 +430,7 @@ fn path_from_base<const N: usize>(base: Option<PathBuf>, parts: [&str; N]) -> St
 fn live_source_paths_from_settings(settings: &AppSettings) -> HashMap<String, String> {
     let mut paths = default_live_source_paths();
 
-    for source in ["codex", "claude", "opencode", "openclaw", "hermes"] {
+    for source in known_live_sources() {
         if let Some(path) = settings.live_source_paths.get(source) {
             let path = path.trim();
             if !path.is_empty() {
@@ -425,7 +445,7 @@ fn live_source_paths_from_settings(settings: &AppSettings) -> HashMap<String, St
 fn live_source_focus_targets_from_settings(settings: &AppSettings) -> HashMap<String, String> {
     let mut targets = default_live_source_focus_targets();
 
-    for source in ["codex", "claude", "opencode", "openclaw", "hermes"] {
+    for source in known_live_sources() {
         if let Some(target) = settings.live_source_focus_targets.get(source) {
             let target = target.trim();
             if !target.is_empty() && validate_focus_target(target).is_ok() {
@@ -446,10 +466,18 @@ fn live_source_enabled_from_settings(settings: &AppSettings, source: &str) -> bo
 }
 
 fn is_known_live_source(source: &str) -> bool {
-    matches!(
-        source,
-        "codex" | "claude" | "opencode" | "openclaw" | "hermes"
-    )
+    known_live_sources().contains(&source)
+}
+
+fn known_live_sources() -> [&'static str; 6] {
+    [
+        "codex",
+        "claude",
+        "opencode",
+        "openclaw",
+        "hermes",
+        "antigravity",
+    ]
 }
 
 fn validate_focus_target(target: &str) -> Result<(), String> {
@@ -477,6 +505,7 @@ fn source_label(source: &str) -> &str {
         "opencode" => "opencode",
         "openclaw" => "OpenClaw",
         "hermes" => "Hermes Agent",
+        "antigravity" => "Antigravity",
         _ => source,
     }
 }
@@ -496,7 +525,7 @@ mod focus_target_tests {
     #[test]
     fn default_focus_targets_cover_known_sources() {
         let targets = default_live_source_focus_targets();
-        for source in ["codex", "claude", "opencode", "openclaw", "hermes"] {
+        for source in known_live_sources() {
             assert!(targets.contains_key(source), "missing target for {source}");
             assert!(validate_focus_target(targets.get(source).unwrap()).is_ok());
         }
@@ -543,9 +572,17 @@ mod focus_target_tests {
     fn live_source_enabled_defaults_to_only_codex() {
         let settings = AppSettings::default();
         assert!(live_source_enabled_from_settings(&settings, "codex"));
-        for source in ["claude", "opencode", "openclaw", "hermes"] {
+        for source in ["claude", "opencode", "openclaw", "hermes", "antigravity"] {
             assert!(!live_source_enabled_from_settings(&settings, source));
         }
+    }
+
+    #[test]
+    fn default_live_source_paths_include_antigravity() {
+        let paths = default_live_source_paths();
+        assert!(paths
+            .get("antigravity")
+            .is_some_and(|path| path.ends_with(".gemini/antigravity")));
     }
 
     #[test]

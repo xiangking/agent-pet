@@ -7,18 +7,26 @@ use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tauri::async_runtime::Mutex;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_util::sync::CancellationToken;
 
 pub struct WebSocketServer {
     port: u16,
     state_machine: Arc<Mutex<PetStateMachine>>,
+    cancellation_token: CancellationToken,
 }
 
 impl WebSocketServer {
-    pub fn new(port: u16, state_machine: Arc<Mutex<PetStateMachine>>) -> Self {
+    pub fn new(
+        port: u16,
+        state_machine: Arc<Mutex<PetStateMachine>>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         Self {
             port,
             state_machine,
+            cancellation_token,
         }
     }
 
@@ -27,16 +35,39 @@ impl WebSocketServer {
         let listener = TcpListener::bind(&addr).await?;
         log::info!("WebSocket server listening on ws://{}", addr);
 
-        while let Ok((stream, _)) = listener.accept().await {
-            let state_machine = self.state_machine.clone();
-            tokio::spawn(handle_connection(stream, state_machine));
+        while !self.cancellation_token.is_cancelled() {
+            if !self.state_machine.lock().await.websocket_enabled() {
+                tokio::select! {
+                    _ = self.cancellation_token.cancelled() => break,
+                    _ = sleep(Duration::from_millis(700)) => {}
+                }
+                continue;
+            }
+
+            let accepted = tokio::select! {
+                _ = self.cancellation_token.cancelled() => break,
+                result = listener.accept() => result,
+            };
+
+            match accepted {
+                Ok((stream, _)) => {
+                    let state_machine = self.state_machine.clone();
+                    let cancellation_token = self.cancellation_token.clone();
+                    tokio::spawn(handle_connection(stream, state_machine, cancellation_token));
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
 
         Ok(())
     }
 }
 
-async fn handle_connection(stream: TcpStream, state_machine: Arc<Mutex<PetStateMachine>>) {
+async fn handle_connection(
+    stream: TcpStream,
+    state_machine: Arc<Mutex<PetStateMachine>>,
+    cancellation_token: CancellationToken,
+) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {
@@ -57,7 +88,16 @@ async fn handle_connection(stream: TcpStream, state_machine: Arc<Mutex<PetStateM
     });
     let _ = write.send(Message::Text(welcome.to_string())).await;
 
-    while let Some(msg) = read.next().await {
+    loop {
+        let msg = tokio::select! {
+            _ = cancellation_token.cancelled() => break,
+            msg = read.next() => msg,
+        };
+
+        let Some(msg) = msg else {
+            break;
+        };
+
         match msg {
             Ok(Message::Text(text)) => {
                 log::debug!("Received: {}", text);
