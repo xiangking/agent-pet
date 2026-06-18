@@ -206,6 +206,40 @@ Then send:
 {"message_type":"processing","source":"manual"}
 ```
 
+Stable usage information such as quota, balance, reset time, or provider health
+belongs in the usage dashboard:
+
+```json
+{
+  "kind": "usage",
+  "id": "claude-quota",
+  "source": "claude",
+  "sourceLabel": "Claude",
+  "label": "Quota",
+  "value": "18%",
+  "detail": "reset 2h",
+  "percent": 18,
+  "status": "warning"
+}
+```
+
+Discrete actionable events belong in the sticky note stack. These notes are
+shown separately from the short activity bubble used for transient work/done
+messages:
+
+```json
+{
+  "kind": "notice",
+  "id": "claude-quota-low",
+  "groupKey": "claude-quota-low",
+  "level": "warning",
+  "title": "Claude quota is getting low",
+  "body": "18% remaining. It should reset in about 2 hours.",
+  "source": "claude",
+  "ttlSeconds": 600
+}
+```
+
 ## Live Sources
 
 Agent Pet can watch local activity files from:
@@ -217,10 +251,11 @@ Agent Pet can watch local activity files from:
 - Hermes Agent
 - Antigravity
 
-The paths are configurable in Settings. Source prefixes are optional and disabled by default, so assistant replies can appear as clean pet bubbles.
+The paths are configurable in Settings. Short pet bubbles still show transient
+activity and brief assistant replies.
 The default Antigravity path is `~/.gemini/antigravity`; change it in Settings if your installation stores conversations elsewhere.
 
-The app is designed to ignore user-authored messages where the source format makes the role clear, and show assistant/tool activity instead.
+The app is designed to ignore user-authored messages where the source format makes the role clear, while keeping quota, balance, reset, provider health, and actionable reminders in the dashboard and sticky notes instead of the short bubble.
 
 ## Project Structure
 

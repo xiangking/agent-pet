@@ -206,6 +206,37 @@ websocat ws://127.0.0.1:8765
 {"message_type":"processing","source":"manual"}
 ```
 
+额度、余额、重置时间、Provider 健康状态这类稳定信息应该发送到 usage 仪表盘：
+
+```json
+{
+  "kind": "usage",
+  "id": "claude-quota",
+  "source": "claude",
+  "sourceLabel": "Claude",
+  "label": "Quota",
+  "value": "18%",
+  "detail": "2 小时后重置",
+  "percent": 18,
+  "status": "warning"
+}
+```
+
+需要用户处理的离散事件适合发送到便利贴提醒堆栈。它们会和 Working、Done 这类短暂日常活动气泡分开显示：
+
+```json
+{
+  "kind": "notice",
+  "id": "claude-quota-low",
+  "groupKey": "claude-quota-low",
+  "level": "warning",
+  "title": "Claude 额度偏低",
+  "body": "剩余 18%，约 2 小时后重置。",
+  "source": "claude",
+  "ttlSeconds": 600
+}
+```
+
 ## 实时来源
 
 Agent Pet 可以监听这些工具的本地活动文件：
@@ -217,10 +248,10 @@ Agent Pet 可以监听这些工具的本地活动文件：
 - Hermes Agent
 - Antigravity
 
-监听路径可以在 Settings 里配置。软件来源前缀是可选项，并且默认关闭，所以助手回复可以以更干净的气泡展示。
+监听路径可以在 Settings 里配置。短气泡仍然会展示 Working、Done 这类短暂活动状态，以及简短的助手回复。
 Antigravity 默认监听路径是 `~/.gemini/antigravity`；如果你的安装位置不同，可以在 Settings 里修改。
 
-在来源格式能够明确区分角色时，应用会尽量忽略用户自己发送的消息，只展示助手回复或工具活动。
+在来源格式能够明确区分角色时，应用会尽量忽略用户自己发送的消息；额度、余额、重置、Provider 健康状态和需要处理的提醒会进入仪表盘或便利贴，而不是挤进短气泡。
 
 ## 项目结构
 
