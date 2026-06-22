@@ -618,12 +618,39 @@ body {
 
 .notice-stack {
   position: absolute;
-  width: 268px;
+  width: 292px;
   height: auto;
   pointer-events: auto;
   display: grid;
   gap: 8px;
   animation: panel-pop-right 0.2s ease-out;
+}
+
+.notice-scroll {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 8px;
+  max-height: var(--notice-scroll-height, 216px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 3px 2px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(60, 60, 67, 0.24) transparent;
+  mask-image: linear-gradient(180deg, #000 0%, #000 calc(100% - 14px), rgba(0, 0, 0, 0.12) 100%);
+}
+
+.notice-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.notice-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.notice-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(60, 60, 67, 0.2);
 }
 
 .stack-title {
@@ -653,12 +680,14 @@ body {
 }
 
 .sticky-notice {
+  cursor: grab;
   position: relative;
   right: auto;
   top: auto;
   width: 100%;
-  min-height: 78px;
-  padding: 9px 11px 9px 12px;
+  height: 124px;
+  overflow: hidden;
+  padding: 8px 11px 12px 12px;
   transform: none;
   border: 0.5px solid rgba(255, 255, 255, 0.64);
   border-radius: 18px;
@@ -751,7 +780,7 @@ body {
 
 .sticky-header {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
   min-height: 19px;
@@ -804,12 +833,32 @@ body {
   white-space: nowrap;
 }
 
+.sticky-type {
+  position: relative;
+  z-index: 2;
+  max-width: 58px;
+  overflow: hidden;
+  padding: 3px 6px;
+  border: 0.5px solid rgba(60, 60, 67, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  color: rgba(60, 60, 67, 0.56);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sticky-main {
-  min-height: 36px;
+  height: 86px;
   padding-top: 5px;
 }
 
 .sticky-copy {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   min-width: 0;
 }
 
@@ -851,13 +900,63 @@ body {
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+  -webkit-line-clamp: 2;
   margin-top: 3px;
   color: rgba(60, 60, 67, 0.64);
   font-size: 11px;
   font-weight: 550;
-  line-height: 1.1;
+  line-height: 1.16;
   overflow-wrap: anywhere;
+}
+
+.sticky-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.sticky-action-hint {
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px 7px;
+  border: 0.5px solid rgba(60, 60, 67, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.3);
+  color: rgba(60, 60, 67, 0.62);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticky-action-button {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  max-width: 82px;
+  overflow: hidden;
+  height: 20px;
+  padding: 0 8px;
+  border: 0.5px solid rgba(0, 122, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.12);
+  color: #0066d6;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.sticky-action-button:hover {
+  background: rgba(0, 122, 255, 0.18);
+  transform: translateY(-1px);
 }
 
 .sticky-close {

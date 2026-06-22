@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ATLAS_HEIGHT, ATLAS_WIDTH } from './constants'
 
-const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v2'
+const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v6'
 const PANEL_SIZE_STORAGE_KEY = 'agent-pet-panel-sizes-v1'
 const MAX_VISIBLE_USAGE_METRICS = 24
-const NOTICE_CARD_HEIGHT = 78
-const NOTICE_TITLE_HEIGHT = 23
+const NOTICE_CARD_HEIGHT = 124
 const NOTICE_OVERFLOW_HEIGHT = 23
 const NOTICE_STACK_GAP = 8
-const NOTICE_TOP_GAP = 12
+const NOTICE_TOP_GAP = 6
+const NOTICE_PANEL_MIN_HEIGHT = 88
+const NOTICE_PANEL_MAX_HEIGHT = NOTICE_CARD_HEIGHT * 2 + NOTICE_STACK_GAP
 
 const PANEL_DEFAULT_SIZES = {
   usage: { width: 304, height: 258 },
-  notices: { width: 268, height: NOTICE_TITLE_HEIGHT + NOTICE_CARD_HEIGHT + NOTICE_STACK_GAP },
+  notices: { width: 292, height: NOTICE_PANEL_MAX_HEIGHT },
 }
 
 const PANEL_SIZE_LIMITS = {
@@ -27,13 +28,6 @@ const CONTEXT_MENU_SIZE = {
 }
 
 const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max)
-
-const estimatedNoticeStackHeight = (visibleCount, hiddenCount) => {
-  if (visibleCount <= 0) return 0
-  const cardGaps = Math.max(0, visibleCount - 1) * NOTICE_STACK_GAP
-  const overflow = hiddenCount > 0 ? NOTICE_STACK_GAP + NOTICE_OVERFLOW_HEIGHT : 0
-  return NOTICE_TITLE_HEIGHT + NOTICE_STACK_GAP + visibleCount * NOTICE_CARD_HEIGHT + cardGaps + overflow
-}
 
 const readStoredPanelPositions = () => {
   try {
@@ -56,6 +50,30 @@ const noticeIcon = {
   warning: '!',
   success: '✓',
   info: 'i',
+}
+
+const noticeTypeLabel = (type, locale) => {
+  const labels = {
+    approval_required: { en: 'Approval', 'zh-CN': '需批准' },
+    confirm_required: { en: 'Confirm', 'zh-CN': '需确认' },
+    press_enter_required: { en: 'Continue', 'zh-CN': '需继续' },
+    context_compacting: { en: 'Context', 'zh-CN': '上下文' },
+    task_failed: { en: 'Failed', 'zh-CN': '失败' },
+    info: { en: 'Notice', 'zh-CN': '提醒' },
+  }
+  return labels[type]?.[locale] || labels.info[locale] || labels.info.en
+}
+
+const noticeTranslationKeySuffix = (type) => {
+  const suffixes = {
+    approval_required: 'ApprovalRequired',
+    confirm_required: 'ConfirmRequired',
+    press_enter_required: 'PressEnterRequired',
+    context_compacting: 'ContextCompacting',
+    task_failed: 'TaskFailed',
+    info: 'Info',
+  }
+  return suffixes[type] || suffixes.info
 }
 
 const formatWindowLabel = (minutes, locale) => {
@@ -263,6 +281,7 @@ function PetWindow({
   displayWidth,
   getBackgroundPosition,
   handleBubbleClick,
+  handleNoticeAction,
   handleNoticeDismiss,
   handleOpenSettings,
   handlePetMouseDown,
@@ -285,8 +304,18 @@ function PetWindow({
     () => groupUsageMetrics(visibleMetrics, t('localeCode')),
     [t, visibleMetrics],
   )
-  const visibleNotices = notices.slice(0, 4)
+  const visibleNotices = notices.slice(0, 8)
   const hiddenNoticeCount = Math.max(0, notices.length - visibleNotices.length)
+  const visibleNoticeCount = Math.min(Math.max(visibleNotices.length, 1), 2)
+  const preferredNoticePanelHeight = visibleNoticeCount * NOTICE_CARD_HEIGHT
+    + Math.max(0, visibleNoticeCount - 1) * NOTICE_STACK_GAP
+  const petTop = windowHeight - displayHeight
+  const noticePanelHeight = clampNumber(
+    Math.min(preferredNoticePanelHeight, petTop - NOTICE_TOP_GAP - 8),
+    Math.min(NOTICE_PANEL_MIN_HEIGHT, Math.max(0, petTop - NOTICE_TOP_GAP - 8)),
+    NOTICE_PANEL_MAX_HEIGHT,
+  )
+  const noticeScrollHeight = Math.max(72, noticePanelHeight)
   const stackColors = ['yellow', 'mint', 'peach']
   const [panelPositions, setPanelPositions] = useState(readStoredPanelPositions)
   const [panelSizes, setPanelSizes] = useState(readStoredPanelSizes)
@@ -301,6 +330,10 @@ function PetWindow({
     const storedSize = panelSizes[panel] || {}
     if (!defaultSize) return { width: 0, height: 0 }
 
+    if (panel === 'notices') {
+      return { width: defaultSize.width, height: noticePanelHeight }
+    }
+
     const limits = PANEL_SIZE_LIMITS[panel]
     if (!limits) return defaultSize
 
@@ -312,16 +345,13 @@ function PetWindow({
       width: clampNumber(Number(storedSize.width) || defaultSize.width, limits.minWidth, maxWidth),
       height: clampNumber(Number(storedSize.height) || defaultSize.height, limits.minHeight, maxHeight),
     }
-  }, [panelSizes, windowHeight, windowWidth])
+  }, [noticePanelHeight, panelSizes, windowHeight, windowWidth])
 
   const defaultPanelPositions = useMemo(() => {
-    const petTop = windowHeight - displayHeight
     const headX = windowWidth / 2
     const topGap = 42
     const sideGap = 12
     const noticeWidth = PANEL_DEFAULT_SIZES.notices.width
-    const noticeHeight = estimatedNoticeStackHeight(visibleNotices.length, hiddenNoticeCount)
-      || PANEL_DEFAULT_SIZES.notices.height
 
     return {
       usage: {
@@ -330,20 +360,23 @@ function PetWindow({
       },
       notices: {
         x: headX - noticeWidth / 2,
-        y: petTop - noticeHeight - NOTICE_TOP_GAP,
+        y: petTop - noticePanelHeight - NOTICE_TOP_GAP,
       },
     }
-  }, [displayHeight, hiddenNoticeCount, resolvePanelSize, visibleNotices.length, windowHeight, windowWidth])
+  }, [noticePanelHeight, petTop, resolvePanelSize, windowWidth])
 
   const clampPanelPosition = useCallback((panel, position, sizeOverride) => {
     const size = sizeOverride || resolvePanelSize(panel)
     const margin = 8
+    const maxY = panel === 'notices'
+      ? Math.max(margin, petTop - size.height - NOTICE_TOP_GAP)
+      : Math.max(margin, windowHeight - size.height - margin)
 
     return {
       x: Math.min(Math.max(position.x, margin), Math.max(margin, windowWidth - size.width - margin)),
-      y: Math.min(Math.max(position.y, margin), Math.max(margin, windowHeight - size.height - margin)),
+      y: Math.min(Math.max(position.y, margin), maxY),
     }
-  }, [resolvePanelSize, windowHeight, windowWidth])
+  }, [petTop, resolvePanelSize, windowHeight, windowWidth])
 
   const resolvePanelPosition = useCallback((panel) => (
     clampPanelPosition(panel, panelPositions[panel] || defaultPanelPositions[panel])
@@ -713,44 +746,68 @@ function PetWindow({
           className={`notice-stack floating-panel ${draggingPanel === 'notices' ? 'dragging' : ''}`}
           onMouseDown={(event) => handlePanelMouseDown('notices', event)}
           onClick={(event) => event.stopPropagation()}
-          style={{ left: noticePosition.x, top: noticePosition.y }}
+          style={{ left: noticePosition.x, top: noticePosition.y, height: noticePanelHeight }}
         >
-          <div className="stack-title">{t('notes')}</div>
-          {visibleNotices.map((item, index) => {
-            const value = item.value || item.detail || ''
-            return (
-              <div
-                className={`sticky-notice sticky-${item.level || 'info'} sticky-paper-${stackColors[index % stackColors.length]}`}
-                key={item.id}
-                style={{ '--stack-index': index }}
-                title={item.sourceLabel || item.source}
-              >
-                <div className="sticky-header">
-                  <span className="sticky-pin" aria-hidden="true">{noticeIcon[item.level] || noticeIcon.info}</span>
-                  <div className="sticky-source">{item.sourceLabel || item.source || 'Agent Pet'}</div>
-                  <button
-                    type="button"
-                    className="sticky-close"
-                    onMouseDown={(event) => event.stopPropagation()}
-                    onClick={(event) => handleNoticeDismiss(event, item)}
-                    aria-label={t('dismissNotice')}
-                  >
-                    {t('markNoticeRead')}
-                  </button>
-                </div>
-                <div className="sticky-main">
-                  <div className="sticky-copy">
-                    <div className="sticky-title">{item.title}</div>
-                    {value && <div className="sticky-value">{value}</div>}
-                    {item.body && <div className="sticky-body">{item.body}</div>}
+          <div
+            className="notice-scroll"
+            style={{ '--notice-scroll-height': `${noticeScrollHeight}px` }}
+          >
+            {visibleNotices.map((item, index) => {
+              const value = item.value || item.detail || ''
+              const hasAction = item.focusSource || item.actionKind || item.actionLabel || item.actionHint
+              const noticeSuffix = noticeTranslationKeySuffix(item.noticeType || 'info')
+              const displayTitle = item.title || t(`noticeTitle${noticeSuffix}`)
+              const displayActionHint = item.actionHint || t(`noticeHint${noticeSuffix}`)
+              return (
+                <div
+                  className={`sticky-notice sticky-${item.level || 'info'} sticky-type-${item.noticeType || 'info'} sticky-paper-${stackColors[index % stackColors.length]}`}
+                  key={item.id}
+                  style={{ '--stack-index': index }}
+                  title={item.sourceLabel || item.source}
+                >
+                  <div className="sticky-header">
+                    <span className="sticky-pin" aria-hidden="true">{noticeIcon[item.level] || noticeIcon.info}</span>
+                    <div className="sticky-source">{item.sourceLabel || item.source || 'Agent Pet'}</div>
+                    <div className="sticky-type">{noticeTypeLabel(item.noticeType || 'info', t('localeCode'))}</div>
+                    <button
+                      type="button"
+                      className="sticky-close"
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onClick={(event) => handleNoticeDismiss(event, item)}
+                      aria-label={t('dismissNotice')}
+                    >
+                      {t('markNoticeRead')}
+                    </button>
+                  </div>
+                  <div className="sticky-main">
+                    <div className="sticky-copy">
+                      <div className="sticky-title">{displayTitle}</div>
+                      {value && <div className="sticky-value">{value}</div>}
+                      {item.body && <div className="sticky-body">{item.body}</div>}
+                      {(displayActionHint || hasAction) && (
+                        <div className="sticky-action-row">
+                          {displayActionHint && <span className="sticky-action-hint">{displayActionHint}</span>}
+                          {hasAction && item.source && handleNoticeAction && (
+                            <button
+                              type="button"
+                              className="sticky-action-button"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={(event) => handleNoticeAction(event, item)}
+                            >
+                              {item.actionLabel || t('noticeActionReview')}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })}
-          {hiddenNoticeCount > 0 && (
-            <div className="sticky-overflow">{t('moreNotices', { count: hiddenNoticeCount })}</div>
-          )}
+              )
+            })}
+            {hiddenNoticeCount > 0 && (
+              <div className="sticky-overflow">{t('moreNotices', { count: hiddenNoticeCount })}</div>
+            )}
+          </div>
         </div>
       )}
 

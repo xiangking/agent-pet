@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { emit, emitTo, listen } from '@tauri-apps/api/event'
 import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window'
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { t as translate } from './locales'
@@ -36,6 +36,9 @@ const POINTER_HIT_SELECTORS = [
   '.usage-dashboard',
   '.notice-stack',
 ]
+const NOTICE_CARD_HEIGHT = 124
+const NOTICE_CARD_GAP = 8
+const NOTICE_STACK_PADDING = 16
 
 const isPointInsideVisiblePetSurface = (x, y) => {
   if (document.body.classList.contains('pet-pointer-capture')) return true
@@ -87,6 +90,7 @@ const normalizeNotice = (payload = {}) => ({
   id: payload.id || payload.groupKey || `${payload.source || 'notice'}-${Date.now()}`,
   groupKey: payload.groupKey || payload.id || '',
   level: payload.level || 'info',
+  noticeType: payload.noticeType || payload.notice_type || 'info',
   title: payload.title || 'Notice',
   body: payload.body || '',
   value: payload.value || '',
@@ -94,6 +98,11 @@ const normalizeNotice = (payload = {}) => ({
   art: payload.art || '',
   source: payload.source || '',
   sourceLabel: payload.sourceLabel || '',
+  actionHint: payload.actionHint || payload.action_hint || '',
+  actionLabel: payload.actionLabel || payload.action_label || '',
+  focusSource: Boolean(payload.focusSource || payload.focus_source),
+  actionKind: payload.actionKind || payload.action_kind || '',
+  automationSafe: Boolean(payload.automationSafe || payload.automation_safe),
   ttlSeconds: Number.isFinite(Number(payload.ttlSeconds)) ? Number(payload.ttlSeconds) : null,
   receivedAt: Date.now(),
 })
@@ -110,13 +119,108 @@ const normalizeUsageMetric = (payload = {}) => ({
   meta: payload.meta && typeof payload.meta === 'object' ? payload.meta : {},
 })
 
+const upsertNotice = (items, notice) => {
+  const key = notice.groupKey || notice.id
+  const withoutExisting = items.filter((item) => (item.groupKey || item.id) !== key)
+  return [notice, ...withoutExisting].slice(0, 8)
+}
+
+const noticeTestSamples = [
+  {
+    id: 'manual-test-notice-approval',
+    groupKey: 'manual-test-notice-approval',
+    level: 'warning',
+    noticeType: 'approval_required',
+    body: 'Allow tool call: read ~/.local/share/opencode',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-confirm',
+    groupKey: 'manual-test-notice-confirm',
+    level: 'warning',
+    noticeType: 'confirm_required',
+    body: 'Continue with this operation? (y/n)',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-enter',
+    groupKey: 'manual-test-notice-enter',
+    level: 'warning',
+    noticeType: 'press_enter_required',
+    body: 'Press Enter to continue',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-compact',
+    groupKey: 'manual-test-notice-compact',
+    level: 'info',
+    noticeType: 'context_compacting',
+    body: 'Compacting context before continuing',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-failed',
+    groupKey: 'manual-test-notice-failed',
+    level: 'error',
+    noticeType: 'task_failed',
+    body: 'Command failed with exit code 1',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-info',
+    groupKey: 'manual-test-notice-info',
+    level: 'info',
+    noticeType: 'info',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+]
+
 const listenSafe = async (eventName, handler) => {
   try {
-    return await listen(eventName, handler)
+    const unlisten = await listen(eventName, handler)
+    return () => {
+      try {
+        unlisten()
+      } catch (e) {
+        console.warn(`Failed to unlisten ${eventName}:`, e)
+      }
+    }
   } catch (e) {
     console.error(`Failed to listen for ${eventName}:`, e)
     return () => {}
   }
+}
+
+const cleanupListener = (listenerPromise) => {
+  Promise.resolve(listenerPromise)
+    .then((unlisten) => {
+      if (typeof unlisten === 'function') unlisten()
+    })
+    .catch((e) => {
+      console.warn('Failed to cleanup listener:', e)
+    })
 }
 
 function App() {
@@ -160,6 +264,7 @@ function App() {
   
   const animRef = useRef(null)
   const bubbleTimerRef = useRef(null)
+  const windowLabelRef = useRef('')
   const lastTimeRef = useRef(0)
   const frameRef = useRef(0)
   const stateRef = useRef('idle')
@@ -167,13 +272,25 @@ function App() {
   const windowFrameRef = useRef(null)
   const usageDashboardPinnedRef = useRef(usageDashboardPinned)
   const usageDashboardAutoHideTimerRef = useRef(null)
+  const dismissedNoticeKeysRef = useRef(new Set())
   const displayWidth = CELL_WIDTH * petScale
   const displayHeight = CELL_HEIGHT * petScale
   const usageDashboardVisible = usageDashboardPinned || usageDashboardTemporaryVisible
   const visibleUsageMetrics = usageDashboardVisible ? usageMetrics : []
-  const hasPetPanels = usageDashboardVisible || notices.length > 0
+  const hasNotices = notices.length > 0
+  const visibleNoticeCount = Math.min(Math.max(notices.length, 1), 2)
+  const noticeStackHeight = hasNotices
+    ? visibleNoticeCount * NOTICE_CARD_HEIGHT
+      + Math.max(0, visibleNoticeCount - 1) * NOTICE_CARD_GAP
+      + NOTICE_STACK_PADDING
+    : 0
+  const hasPetPanels = usageDashboardVisible || hasNotices
   const windowWidth = Math.max(displayWidth, MIN_WINDOW_WIDTH, hasPetPanels ? PET_STAGE_WIDTH : 0)
-  const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT + (hasPetPanels ? PET_STAGE_EXTRA_HEIGHT : 0)
+  const panelExtraHeight = Math.max(
+    usageDashboardVisible ? PET_STAGE_EXTRA_HEIGHT : 0,
+    noticeStackHeight,
+  )
+  const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT + panelExtraHeight
 
   const clearUsageDashboardAutoHide = () => {
     if (!usageDashboardAutoHideTimerRef.current) return
@@ -197,6 +314,31 @@ function App() {
     scheduleUsageDashboardAutoHide()
   }
 
+  const publishPetGeometry = async () => {
+    try {
+      if (windowLabel !== 'pet') return
+      const sprite = document.querySelector('.pet-sprite')
+      if (!sprite) return
+      const rect = sprite.getBoundingClientRect()
+      const petWindow = getCurrentWindow()
+      const [position, scaleFactor] = await Promise.all([
+        petWindow.outerPosition(),
+        petWindow.scaleFactor(),
+      ])
+      const windowPosition = position.toLogical(scaleFactor)
+      const geometry = {
+        left: windowPosition.x + rect.left,
+        top: windowPosition.y + rect.top,
+        width: rect.width,
+        height: rect.height,
+        centerX: windowPosition.x + rect.left + rect.width / 2,
+      }
+      await emit('pet-geometry', geometry)
+    } catch (e) {
+      console.error('Failed to publish pet geometry:', e)
+    }
+  }
+
   useEffect(() => {
     if (windowLabel !== 'pet') return
 
@@ -214,13 +356,29 @@ function App() {
         }
 
         windowFrameRef.current = { width: windowWidth, height: windowHeight }
+        requestAnimationFrame(publishPetGeometry)
       } catch (e) {
         console.error('Failed to resize pet window:', e)
       }
     }
 
     resizePetWindow()
-  }, [windowHeight, windowLabel, windowWidth])
+  }, [windowHeight, windowLabel, windowWidth, displayHeight, displayWidth])
+
+  useEffect(() => {
+    if (windowLabel !== 'pet' || !spritesheet) return
+
+    requestAnimationFrame(publishPetGeometry)
+    const timer = window.setInterval(publishPetGeometry, 500)
+    const unlistenGeometryRequest = listenSafe('request-pet-geometry', () => {
+      requestAnimationFrame(publishPetGeometry)
+    })
+
+    return () => {
+      window.clearInterval(timer)
+      cleanupListener(unlistenGeometryRequest)
+    }
+  }, [displayHeight, displayWidth, petScale, spritesheet, windowLabel])
 
   useEffect(() => {
     if (windowLabel !== 'pet') return undefined
@@ -306,6 +464,7 @@ function App() {
       }
 
       setWindowLabel(label)
+      windowLabelRef.current = label
 
       if (label === 'pet') {
         loadLanguage()
@@ -313,6 +472,7 @@ function App() {
         loadPetList()
         loadInitialPet()
         loadUsageMetrics()
+        loadCurrentNotices()
       } else {
         loadPetScale()
         loadPetList()
@@ -370,19 +530,22 @@ function App() {
       }, 4200)
     })
 
-    const unlistenPetNotice = listen('pet-notice', (event) => {
-      const title = event.payload?.title
-      if (!title) return
+    const unlistenPetNotice = listenSafe('pet-notice', (event) => {
+      if (!event.payload) return
 
       const notice = normalizeNotice(event.payload)
-      setNotices((prev) => {
-        const key = notice.groupKey || notice.id
-        const withoutExisting = prev.filter((item) => (item.groupKey || item.id) !== key)
-        return [notice, ...withoutExisting].slice(0, 8)
-      })
+      setNotices((prev) => upsertNotice(prev, notice))
     })
 
-    const unlistenPetUsage = listen('pet-usage', (event) => {
+    const unlistenSyncNotices = listenSafe('sync-notices', () => {
+      if (windowLabelRef.current === 'pet') {
+        loadCurrentNotices()
+      }
+    })
+
+    const unlistenPetUsage = listenSafe('pet-usage', (event) => {
+      if (!event.payload) return
+
       const metric = normalizeUsageMetric(event.payload)
       setUsageMetrics((prev) => {
         const withoutExisting = prev.filter((item) => item.id !== metric.id)
@@ -391,12 +554,13 @@ function App() {
     })
 
     return () => {
-      unlistenState.then(f => f())
-      unlistenPetLoaded.then(f => f())
-      unlistenScaleChanged.then(f => f())
-      unlistenCodexBubble.then(f => f())
-      unlistenPetNotice.then(f => f())
-      unlistenPetUsage.then(f => f())
+      cleanupListener(unlistenState)
+      cleanupListener(unlistenPetLoaded)
+      cleanupListener(unlistenScaleChanged)
+      cleanupListener(unlistenCodexBubble)
+      cleanupListener(unlistenPetNotice)
+      cleanupListener(unlistenSyncNotices)
+      cleanupListener(unlistenPetUsage)
       if (bubbleTimerRef.current) {
         clearTimeout(bubbleTimerRef.current)
       }
@@ -419,6 +583,15 @@ function App() {
 
     return () => clearInterval(timer)
   }, [notices])
+
+  useEffect(() => {
+    if (windowLabel !== 'pet') return undefined
+
+    loadCurrentNotices()
+    const timer = window.setInterval(loadCurrentNotices, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [windowLabel])
 
   // Animation loop
   useEffect(() => {
@@ -620,6 +793,22 @@ function App() {
     }
   }
 
+  const loadCurrentNotices = async () => {
+    try {
+      const currentNotices = await invoke('get_current_notices')
+      if (Array.isArray(currentNotices)) {
+        setNotices(
+          currentNotices
+            .map(normalizeNotice)
+            .filter((notice) => !dismissedNoticeKeysRef.current.has(notice.groupKey || notice.id))
+            .slice(0, 8),
+        )
+      }
+    } catch (e) {
+      console.error('Failed to load current notices:', e)
+    }
+  }
+
   const handleLoadPet = async (petId) => {
     try {
       const pet = await invoke('load_pet', { petId })
@@ -663,12 +852,20 @@ function App() {
     }
   }
 
-  const handleTriggerNotice = async () => {
+  const handleTriggerNotice = async (noticeType = 'all') => {
+    const selectedNoticeType = typeof noticeType === 'string' ? noticeType : 'all'
     try {
-      await invoke('trigger_notice')
+      const emitted = await invoke('trigger_notice', { noticeType: selectedNoticeType })
+      console.info('Triggered test notices:', emitted, selectedNoticeType)
+      await emitTo('pet', 'sync-notices', null)
     } catch (e) {
       console.error('Failed to trigger notice:', e)
     }
+
+    const samples = selectedNoticeType === 'all'
+      ? noticeTestSamples
+      : noticeTestSamples.filter((sample) => sample.noticeType === selectedNoticeType)
+    await Promise.all(samples.map((sample) => emitTo('pet', 'pet-notice', sample)))
   }
 
   const handleUpdateMessageMap = async (key, value) => {
@@ -814,7 +1011,22 @@ function App() {
   const handleNoticeDismiss = (event, notice) => {
     event.stopPropagation()
     const key = notice.groupKey || notice.id
+    dismissedNoticeKeysRef.current.add(key)
     setNotices((prev) => prev.filter((item) => (item.groupKey || item.id) !== key))
+  }
+
+  const handleNoticeAction = async (event, notice) => {
+    event.stopPropagation()
+    if (!notice?.source) return
+
+    try {
+      await invoke('handle_notice_action', {
+        source: notice.source,
+        actionKind: notice.actionKind || 'focus',
+      })
+    } catch (e) {
+      console.error('Failed to handle notice action:', e)
+    }
   }
 
   const handleToggleUsageDashboard = () => {
@@ -868,6 +1080,7 @@ function App() {
         displayWidth={displayWidth}
         getBackgroundPosition={getBackgroundPosition}
         handleBubbleClick={handleBubbleClick}
+        handleNoticeAction={handleNoticeAction}
         handleNoticeDismiss={handleNoticeDismiss}
         handleOpenSettings={handleOpenSettings}
         handlePetMouseDown={handlePetMouseDown}

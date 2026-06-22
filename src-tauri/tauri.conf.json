@@ -21,8 +21,8 @@
         "height": 186,
         "transparent": true,
         "decorations": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
         "resizable": false,
         "visible": false,
         "shadow": false

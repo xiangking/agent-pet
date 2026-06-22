@@ -845,37 +845,96 @@ fn format_token_count(tokens: u64) -> String {
 }
 
 fn activity_notice(source: &str, activity: &CodexActivity) -> Option<PetNotice> {
-    let (level, title) = match activity.message_type {
-        MSG_WAITING_INPUT => {
-            let title = activity
-                .bubble_text
-                .as_deref()
-                .filter(|text| text.contains("批准") || text.contains("允许"))
-                .map(|_| "需要批准")
-                .unwrap_or("需要你处理");
-            ("warning", title)
-        }
-        MSG_ERROR => ("error", "Something failed"),
-        _ => return None,
-    };
-    let source_label = source_label(source).to_string();
     let body = activity
         .bubble_text
         .as_deref()
         .filter(|text| !text.trim().is_empty())
-        .unwrap_or(title);
+        .unwrap_or("");
+    let (level, notice_type) = match activity.message_type {
+        MSG_WAITING_INPUT => notice_action_for_waiting_input(body),
+        MSG_PROCESSING if looks_like_context_compacting(body) => ("info", "context_compacting"),
+        MSG_ERROR => ("error", "task_failed"),
+        _ => return None,
+    };
+    let source_label = source_label(source).to_string();
 
     Some(PetNotice {
         id: format!("{}-{}", source, activity.message_type.replace('_', "-")),
         group_key: format!("{}-{}", source, activity.message_type.replace('_', "-")),
         level: level.to_string(),
-        title: title.to_string(),
+        title: String::new(),
         body: body.to_string(),
         source: source.to_string(),
         source_label: Some(source_label),
+        notice_type: notice_type.to_string(),
+        action_hint: None,
+        action_label: None,
+        focus_source: true,
+        action_kind: Some("focus".to_string()),
+        automation_safe: false,
         ttl_seconds: 600,
         timestamp: None,
     })
+}
+
+fn notice_action_for_waiting_input(text: &str) -> (&'static str, &'static str) {
+    if looks_like_press_enter_prompt(text) {
+        return ("warning", "press_enter_required");
+    }
+    if looks_like_approval_prompt(text) {
+        return ("warning", "approval_required");
+    }
+    if looks_like_confirm_prompt(text) {
+        return ("warning", "confirm_required");
+    }
+    if looks_like_context_compacting(text) {
+        return ("info", "context_compacting");
+    }
+
+    ("warning", "confirm_required")
+}
+
+fn looks_like_approval_prompt(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("批准")
+        || text.contains("允许")
+        || text.contains("授权")
+        || text.contains("permission")
+        || text.contains("approval")
+        || text.contains("allow")
+        || text.contains("deny")
+}
+
+fn looks_like_confirm_prompt(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("(y/n)")
+        || text.contains("[y/n]")
+        || text.contains("yes/no")
+        || text.contains("proceed?")
+        || text.contains("continue?")
+        || text.contains("是否继续")
+        || text.contains("确认继续")
+}
+
+fn looks_like_press_enter_prompt(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("press enter")
+        || text.contains("hit enter")
+        || text.contains("enter to continue")
+        || text.contains("return to continue")
+        || text.contains("按 enter")
+        || text.contains("按回车")
+        || text.contains("回车继续")
+}
+
+fn looks_like_context_compacting(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    (text.contains("compact") && text.contains("context"))
+        || text.contains("compacting")
+        || text.contains("summarizing context")
+        || text.contains("context prune")
+        || text.contains("压缩上下文")
+        || text.contains("整理上下文")
 }
 
 fn expand_source_path(path: Option<String>) -> Option<PathBuf> {
@@ -1634,12 +1693,11 @@ fn event_payload_to_activity(payload: &Value) -> Option<CodexActivity> {
 
 fn response_payload_to_activity(payload: &Value) -> Option<CodexActivity> {
     match payload.get("type")?.as_str()? {
-        "reasoning"
-        | "function_call_output"
-        | "custom_tool_call_output" => Some(activity(MSG_PROCESSING, "Working...")),
-        "function_call" | "custom_tool_call" => {
-            tool_call_approval_activity(payload).or_else(|| Some(activity(MSG_PROCESSING, "Working...")))
+        "reasoning" | "function_call_output" | "custom_tool_call_output" => {
+            Some(activity(MSG_PROCESSING, "Working..."))
         }
+        "function_call" | "custom_tool_call" => tool_call_approval_activity(payload)
+            .or_else(|| Some(activity(MSG_PROCESSING, "Working..."))),
         "message" => match payload.get("role").and_then(Value::as_str) {
             Some("assistant") => Some(CodexActivity {
                 message_type: MSG_NEW_MESSAGE,
@@ -1680,16 +1738,12 @@ fn tool_call_approval_activity(payload: &Value) -> Option<CodexActivity> {
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or("tool");
-    let reason = approval_reason(&arguments).unwrap_or_else(|| {
-        format!(
-            "{} 需要你确认后才能继续。",
-            codex_tool_display_name(tool_name)
-        )
-    });
+    let reason = approval_reason(&arguments)
+        .unwrap_or_else(|| codex_tool_display_name(tool_name).to_string());
 
     Some(CodexActivity {
         message_type: MSG_WAITING_INPUT,
-        bubble_text: Some(format!("需要批准：{}", reason.trim())),
+        bubble_text: Some(reason.trim().to_string()),
         origin: ActivityOrigin::Assistant,
         usage: None,
         usage_metrics: Vec::new(),
@@ -1699,8 +1753,9 @@ fn tool_call_approval_activity(payload: &Value) -> Option<CodexActivity> {
 
 fn parse_tool_arguments(value: &Value) -> Value {
     match value {
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .unwrap_or_else(|_| Value::String(text.clone())),
+        Value::String(text) => {
+            serde_json::from_str::<Value>(text).unwrap_or_else(|_| Value::String(text.clone()))
+        }
         other => other.clone(),
     }
 }
@@ -1714,10 +1769,11 @@ fn value_requests_escalation(value: &Value) -> bool {
                 || value_requests_escalation(value)
         }),
         Value::Array(items) => items.iter().any(value_requests_escalation),
-        Value::String(text) => text.contains("\"sandbox_permissions\":\"require_escalated\"")
-            || text.contains("\"sandboxPermissions\":\"require_escalated\"")
-            || text.contains("sandbox_permissions")
-                && text.contains("require_escalated"),
+        Value::String(text) => {
+            text.contains("\"sandbox_permissions\":\"require_escalated\"")
+                || text.contains("\"sandboxPermissions\":\"require_escalated\"")
+                || text.contains("sandbox_permissions") && text.contains("require_escalated")
+        }
         _ => false,
     }
 }
@@ -2961,13 +3017,90 @@ mod tests {
         assert!(activity.affects_state);
         assert_eq!(
             activity.bubble_text.as_deref(),
-            Some("需要批准：需要读取工作区外的 ~/.local/share/opencode 目录来确认 opencode 真实数据源结构，是否允许？")
+            Some("需要读取工作区外的 ~/.local/share/opencode 目录来确认 opencode 真实数据源结构，是否允许？")
         );
 
         let notice = activity_notice("codex", &activity).unwrap();
         assert_eq!(notice.level, "warning");
-        assert_eq!(notice.title, "需要批准");
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.notice_type, "approval_required");
+        assert_eq!(notice.action_hint, None);
+        assert_eq!(notice.action_label, None);
+        assert!(notice.focus_source);
+        assert_eq!(notice.action_kind.as_deref(), Some("focus"));
+        assert!(!notice.automation_safe);
         assert_eq!(notice.source_label.as_deref(), Some("Codex"));
+    }
+
+    #[test]
+    fn maps_waiting_input_to_confirm_notice() {
+        let activity = CodexActivity {
+            message_type: MSG_WAITING_INPUT,
+            bubble_text: Some("Continue? (y/n)".to_string()),
+            origin: ActivityOrigin::Assistant,
+            usage: None,
+            usage_metrics: vec![],
+            affects_state: true,
+        };
+
+        let notice = activity_notice("claude", &activity).unwrap();
+        assert_eq!(notice.notice_type, "confirm_required");
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
+        assert_eq!(notice.source_label.as_deref(), Some("Claude Code"));
+    }
+
+    #[test]
+    fn maps_waiting_input_to_press_enter_notice() {
+        let activity = CodexActivity {
+            message_type: MSG_WAITING_INPUT,
+            bubble_text: Some("Press Enter to continue".to_string()),
+            origin: ActivityOrigin::Assistant,
+            usage: None,
+            usage_metrics: vec![],
+            affects_state: true,
+        };
+
+        let notice = activity_notice("opencode", &activity).unwrap();
+        assert_eq!(notice.notice_type, "press_enter_required");
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
+    }
+
+    #[test]
+    fn maps_processing_to_context_compacting_notice() {
+        let activity = CodexActivity {
+            message_type: MSG_PROCESSING,
+            bubble_text: Some("Compacting context before continuing".to_string()),
+            origin: ActivityOrigin::Assistant,
+            usage: None,
+            usage_metrics: vec![],
+            affects_state: true,
+        };
+
+        let notice = activity_notice("hermes", &activity).unwrap();
+        assert_eq!(notice.level, "info");
+        assert_eq!(notice.notice_type, "context_compacting");
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
+    }
+
+    #[test]
+    fn maps_error_to_task_failed_notice() {
+        let activity = CodexActivity {
+            message_type: MSG_ERROR,
+            bubble_text: Some("Command failed with exit code 1".to_string()),
+            origin: ActivityOrigin::Assistant,
+            usage: None,
+            usage_metrics: vec![],
+            affects_state: true,
+        };
+
+        let notice = activity_notice("openclaw", &activity).unwrap();
+        assert_eq!(notice.level, "error");
+        assert_eq!(notice.notice_type, "task_failed");
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
     }
 
     #[test]

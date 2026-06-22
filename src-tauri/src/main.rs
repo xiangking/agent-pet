@@ -67,6 +67,12 @@ async fn get_current_state(state: tauri::State<'_, AppState>) -> Result<String, 
 }
 
 #[tauri::command]
+async fn get_current_notices(state: tauri::State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let sm = state.state_machine.lock().await;
+    Ok(sm.notice_payloads())
+}
+
+#[tauri::command]
 async fn trigger_state(
     state: tauri::State<'_, AppState>,
     message_type: String,
@@ -86,21 +92,84 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn trigger_notice(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn trigger_notice(
+    state: tauri::State<'_, AppState>,
+    notice_type: Option<String>,
+) -> Result<usize, String> {
     let sm = state.state_machine.lock().await;
-    sm.show_notice(&PetNotice {
-        id: "manual-test-notice".to_string(),
-        group_key: "manual-test-notice".to_string(),
-        level: "info".to_string(),
-        title: "Manual test".to_string(),
-        body: "Live usage and real notices appear only when a monitored source or WebSocket sends them."
-            .to_string(),
-        source: "manual".to_string(),
-        source_label: Some("Agent Pet".to_string()),
-        ttl_seconds: 60,
-        timestamp: None,
-    });
-    Ok(())
+    let samples = [
+        (
+            "approval",
+            "warning",
+            "approval_required",
+            "Allow tool call: read ~/.local/share/opencode",
+            true,
+        ),
+        (
+            "confirm",
+            "warning",
+            "confirm_required",
+            "Continue with this operation? (y/n)",
+            true,
+        ),
+        (
+            "enter",
+            "warning",
+            "press_enter_required",
+            "Press Enter to continue",
+            true,
+        ),
+        (
+            "compact",
+            "info",
+            "context_compacting",
+            "Compacting context before continuing",
+            false,
+        ),
+        (
+            "failed",
+            "error",
+            "task_failed",
+            "Command failed with exit code 1",
+            true,
+        ),
+        ("info", "info", "info", "", false),
+    ];
+    let requested_type = notice_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
+
+    let mut emitted = 0;
+    for (id, level, notice_type, body, focus_source) in samples {
+        if requested_type
+            .map(|requested| requested != notice_type)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        sm.show_notice(&PetNotice {
+            id: format!("manual-test-notice-{id}"),
+            group_key: format!("manual-test-notice-{id}"),
+            level: level.to_string(),
+            title: String::new(),
+            body: body.to_string(),
+            source: "manual".to_string(),
+            source_label: Some("Agent Pet".to_string()),
+            notice_type: notice_type.to_string(),
+            action_hint: None,
+            action_label: None,
+            focus_source,
+            action_kind: Some("focus".to_string()),
+            automation_safe: false,
+            ttl_seconds: 60,
+            timestamp: None,
+        });
+        emitted += 1;
+    }
+    log::info!("Triggered {emitted} test notice(s)");
+    Ok(emitted)
 }
 
 #[tauri::command]
@@ -270,6 +339,26 @@ async fn focus_live_source(
 }
 
 #[tauri::command]
+async fn handle_notice_action(
+    state: tauri::State<'_, AppState>,
+    source: String,
+    action_kind: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let action = action_kind.unwrap_or_else(|| "focus".to_string());
+    match action.as_str() {
+        "focus" | "press_enter" | "type_yes_enter" | "select_allow" => {
+            focus_live_source(state, source).await?;
+            Ok(serde_json::json!({
+                "status": if action == "focus" { "focused" } else { "manual_required" },
+                "performedAction": "focus",
+                "requestedAction": action,
+            }))
+        }
+        _ => Err(format!("Unsupported notice action: {}", action)),
+    }
+}
+
+#[tauri::command]
 async fn set_live_source_prefix_enabled(
     state: tauri::State<'_, AppState>,
     enabled: bool,
@@ -394,6 +483,7 @@ fn main() {
             install_library_pet,
             load_pet,
             get_current_state,
+            get_current_notices,
             trigger_state,
             open_settings_window,
             trigger_notice,
@@ -408,6 +498,7 @@ fn main() {
             set_live_source_path,
             set_live_source_focus_target,
             focus_live_source,
+            handle_notice_action,
             set_live_source_prefix_enabled,
             get_live_source_prefix_enabled,
             get_usage_metrics,

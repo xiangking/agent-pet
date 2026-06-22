@@ -6,6 +6,7 @@ use crate::pet::{load_pet_config, PetConfig, PetState};
 use crate::settings::{load_settings, save_settings, AppSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{Emitter, LogicalSize, Manager};
 
 const CELL_WIDTH: f64 = 192.0;
@@ -35,6 +36,7 @@ pub struct PetStateMachine {
     live_source_focus_targets: HashMap<String, String>,
     live_source_prefix_enabled: bool,
     usage_metrics: Vec<PetUsageMetric>,
+    notices: Mutex<Vec<PetNotice>>,
     pet_scale: f64,
     language: String,
 }
@@ -63,6 +65,7 @@ impl PetStateMachine {
             live_source_focus_targets: live_source_focus_targets_from_settings(&settings),
             live_source_prefix_enabled: settings.live_source_prefix_enabled,
             usage_metrics: Vec::new(),
+            notices: Mutex::new(Vec::new()),
             pet_scale: DEFAULT_PET_SCALE,
             language: normalize_language(&settings.language).to_string(),
         }
@@ -267,9 +270,29 @@ impl PetStateMachine {
     }
 
     pub fn show_notice(&self, notice: &PetNotice) {
-        if let Some(window) = self.app_handle.get_webview_window("pet") {
-            let _ = window.emit("pet-notice", notice_payload(notice));
+        if let Ok(mut notices) = self.notices.lock() {
+            let key = limit_notice_key(&notice.group_key);
+            let id = limit_notice_key(&notice.id);
+            notices.retain(|item| {
+                let item_key = limit_notice_key(&item.group_key);
+                let item_id = limit_notice_key(&item.id);
+                let same_group = !key.is_empty() && item_key == key;
+                let same_id = !id.is_empty() && item_id == id;
+                !same_group && !same_id
+            });
+            notices.insert(0, notice.clone());
+            notices.truncate(8);
         }
+        let _ = self
+            .app_handle
+            .emit_to("pet", "pet-notice", notice_payload(notice));
+    }
+
+    pub fn notice_payloads(&self) -> Vec<serde_json::Value> {
+        self.notices
+            .lock()
+            .map(|notices| notices.iter().map(notice_payload).collect())
+            .unwrap_or_default()
     }
 
     pub fn show_usage_metric(&self, metric: &PetUsageMetric) {
@@ -579,6 +602,12 @@ fn notice_payload(notice: &PetNotice) -> serde_json::Value {
         "body": limit_notice_body(&notice.body),
         "source": notice.source.trim(),
         "sourceLabel": source_label,
+        "noticeType": normalize_notice_type(&notice.notice_type),
+        "actionHint": notice.action_hint.as_deref().map(limit_text),
+        "actionLabel": notice.action_label.as_deref().map(limit_text),
+        "focusSource": notice.focus_source,
+        "actionKind": notice.action_kind.as_deref().map(normalize_notice_action_kind),
+        "automationSafe": notice.automation_safe,
         "ttlSeconds": notice.ttl_seconds.clamp(15, 3600),
         "timestamp": notice.timestamp,
     })
@@ -631,6 +660,28 @@ fn normalize_notice_level(level: &str) -> &str {
         "warning" | "warn" => "warning",
         "error" | "danger" => "error",
         _ => "info",
+    }
+}
+
+fn normalize_notice_type(notice_type: &str) -> &str {
+    match notice_type.trim().to_ascii_lowercase().as_str() {
+        "approval_required" => "approval_required",
+        "confirm_required" => "confirm_required",
+        "press_enter_required" => "press_enter_required",
+        "context_compacting" => "context_compacting",
+        "task_failed" => "task_failed",
+        "info" => "info",
+        _ => "info",
+    }
+}
+
+fn normalize_notice_action_kind(action_kind: &str) -> &str {
+    match action_kind.trim().to_ascii_lowercase().as_str() {
+        "focus" => "focus",
+        "press_enter" => "press_enter",
+        "type_yes_enter" => "type_yes_enter",
+        "select_allow" => "select_allow",
+        _ => "focus",
     }
 }
 
@@ -722,6 +773,12 @@ mod focus_target_tests {
             body: "18% remaining".to_string(),
             source: "claude".to_string(),
             source_label: None,
+            notice_type: "approval_required".to_string(),
+            action_hint: Some("Allow / Deny".to_string()),
+            action_label: Some("Review".to_string()),
+            focus_source: true,
+            action_kind: Some("focus".to_string()),
+            automation_safe: false,
             ttl_seconds: 2,
             timestamp: None,
         };
@@ -730,6 +787,12 @@ mod focus_target_tests {
         assert_eq!(payload["groupKey"], "claude-quota");
         assert_eq!(payload["level"], "warning");
         assert_eq!(payload["sourceLabel"], "Claude Code");
+        assert_eq!(payload["noticeType"], "approval_required");
+        assert_eq!(payload["actionHint"], "Allow / Deny");
+        assert_eq!(payload["actionLabel"], "Review");
+        assert_eq!(payload["focusSource"], true);
+        assert_eq!(payload["actionKind"], "focus");
+        assert_eq!(payload["automationSafe"], false);
         assert_eq!(payload["ttlSeconds"], 15);
     }
 
