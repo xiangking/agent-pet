@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { emit, listen } from '@tauri-apps/api/event'
 import { cursorPosition, getCurrentWindow, Window } from '@tauri-apps/api/window'
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { t as translate } from './locales'
@@ -194,6 +194,7 @@ function App() {
   const stateRef = useRef('idle')
   const stateStartRef = useRef(Date.now())
   const windowFrameRef = useRef(null)
+  const petGeometryRef = useRef(null)
   const usageDashboardPinnedRef = useRef(usageDashboardPinned)
   const usageDashboardAutoHideTimerRef = useRef(null)
   const displayWidth = CELL_WIDTH * petScale
@@ -226,6 +227,30 @@ function App() {
     scheduleUsageDashboardAutoHide()
   }
 
+  const publishPetGeometry = async () => {
+    try {
+      if (windowLabel !== 'pet') return
+      const sprite = document.querySelector('.pet-sprite')
+      if (!sprite) return
+      const rect = sprite.getBoundingClientRect()
+      const petWindow = getCurrentWindow()
+      const [position, scaleFactor] = await Promise.all([
+        petWindow.outerPosition(),
+        petWindow.scaleFactor(),
+      ])
+      const windowPosition = position.toLogical(scaleFactor)
+      await emit('pet-geometry', {
+        left: windowPosition.x + rect.left,
+        top: windowPosition.y + rect.top,
+        width: rect.width,
+        height: rect.height,
+        centerX: windowPosition.x + rect.left + rect.width / 2,
+      })
+    } catch (e) {
+      console.error('Failed to publish pet geometry:', e)
+    }
+  }
+
   useEffect(() => {
     if (windowLabel !== 'pet') return
 
@@ -243,16 +268,59 @@ function App() {
         }
 
         windowFrameRef.current = { width: windowWidth, height: windowHeight }
+        requestAnimationFrame(publishPetGeometry)
       } catch (e) {
         console.error('Failed to resize pet window:', e)
       }
     }
 
     resizePetWindow()
-  }, [windowHeight, windowLabel, windowWidth])
+  }, [windowHeight, windowLabel, windowWidth, displayHeight, displayWidth])
+
+  useEffect(() => {
+    if (windowLabel !== 'pet' || !spritesheet) return
+
+    requestAnimationFrame(publishPetGeometry)
+    const timer = window.setInterval(publishPetGeometry, 500)
+    const unlistenGeometryRequest = listenSafe('request-pet-geometry', () => {
+      requestAnimationFrame(publishPetGeometry)
+    })
+
+    return () => {
+      window.clearInterval(timer)
+      cleanupListener(unlistenGeometryRequest)
+    }
+  }, [displayHeight, displayWidth, petScale, spritesheet, windowLabel])
 
   useEffect(() => {
     if (windowLabel !== 'notices') return
+
+    const positionNoticeWindow = async () => {
+      try {
+        const noticeWindow = getCurrentWindow()
+        const hasNotices = notices.length > 0
+        const visibleNoticeCount = Math.max(1, Math.min(notices.length, 2))
+        const noticeHeight = hasNotices
+          ? Math.min(
+            NOTICE_WINDOW_HEIGHT,
+            visibleNoticeCount * NOTICE_CARD_HEIGHT
+              + Math.max(0, visibleNoticeCount - 1) * NOTICE_CARD_GAP
+              + NOTICE_WINDOW_VERTICAL_PADDING,
+          )
+          : 1
+        if (!hasNotices) return
+
+        const geometry = petGeometryRef.current
+        if (geometry) {
+          const noticeScaleFactor = await noticeWindow.scaleFactor()
+          const x = Math.max(8, geometry.centerX - NOTICE_WINDOW_WIDTH / 2)
+          const y = Math.max(8, geometry.top - noticeHeight - NOTICE_WINDOW_GAP)
+          await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
+        }
+      } catch (e) {
+        console.error('Failed to position notice window:', e)
+      }
+    }
 
     const resizeNoticeWindow = async () => {
       try {
@@ -271,8 +339,16 @@ function App() {
         await noticeWindow.setIgnoreCursorEvents(!hasNotices)
 
         if (hasNotices) {
-          const petWindow = await Window.getByLabel('pet')
-          if (petWindow) {
+          await emit('request-pet-geometry')
+          const geometry = petGeometryRef.current
+          if (geometry) {
+            const noticeScaleFactor = await noticeWindow.scaleFactor()
+            const x = Math.max(8, geometry.centerX - NOTICE_WINDOW_WIDTH / 2)
+            const y = Math.max(8, geometry.top - noticeHeight - NOTICE_WINDOW_GAP)
+            await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
+          } else {
+            const petWindow = await Window.getByLabel('pet')
+            if (petWindow) {
             const [petPosition, petSize, petScaleFactor, noticeScaleFactor] = await Promise.all([
               petWindow.outerPosition(),
               petWindow.outerSize(),
@@ -285,6 +361,7 @@ function App() {
             const x = Math.max(8, petLogicalPosition.x + (petLogicalSize.width - NOTICE_WINDOW_WIDTH) / 2)
             const y = Math.max(8, petSpriteTop - noticeHeight - NOTICE_WINDOW_GAP)
             await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
+            }
           }
         }
       } catch (e) {
@@ -293,6 +370,17 @@ function App() {
     }
 
     resizeNoticeWindow()
+
+    const unlistenGeometry = listenSafe('pet-geometry', (event) => {
+      const payload = event.payload
+      if (!payload || typeof payload !== 'object') return
+      petGeometryRef.current = payload
+      positionNoticeWindow()
+    })
+
+    return () => {
+      cleanupListener(unlistenGeometry)
+    }
   }, [displayHeight, notices.length, windowLabel])
 
   useEffect(() => {
