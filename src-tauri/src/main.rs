@@ -86,7 +86,10 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn trigger_notice(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn trigger_notice(
+    state: tauri::State<'_, AppState>,
+    notice_type: Option<String>,
+) -> Result<(), String> {
     let sm = state.state_machine.lock().await;
     let samples = [
         (
@@ -126,8 +129,19 @@ async fn trigger_notice(state: tauri::State<'_, AppState>) -> Result<(), String>
         ),
         ("info", "info", "info", "", false),
     ];
+    let requested_type = notice_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
 
     for (id, level, notice_type, body, focus_source) in samples {
+        if requested_type
+            .map(|requested| requested != notice_type)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
         sm.show_notice(&PetNotice {
             id: format!("manual-test-notice-{id}"),
             group_key: format!("manual-test-notice-{id}"),

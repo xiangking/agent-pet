@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react'
 import { LIVE_SOURCES, PET_SCALE_OPTIONS, STATE_ROWS } from './constants'
 
 const INSTALLED_PETS_PAGE_SIZE = 5
+const NOTICE_TEST_TYPES = [
+  ['approval_required', 'testNoticeApproval'],
+  ['confirm_required', 'testNoticeConfirm'],
+  ['press_enter_required', 'testNoticeEnter'],
+  ['context_compacting', 'testNoticeContext'],
+  ['task_failed', 'testNoticeFailed'],
+  ['info', 'testNoticeInfo'],
+]
 
 function SettingsWindow({
   handleChangeLiveSourceFocusTarget,
@@ -464,6 +472,15 @@ function SettingsWindow({
               <button className="button button-primary" onClick={handleTriggerNotice}>
                 {t('testNotice')}
               </button>
+              {NOTICE_TEST_TYPES.map(([noticeType, labelKey]) => (
+                <button
+                  className="button button-ghost"
+                  key={noticeType}
+                  onClick={() => handleTriggerNotice(noticeType)}
+                >
+                  {text(labelKey)}
+                </button>
+              ))}
             </div>
           </section>
 

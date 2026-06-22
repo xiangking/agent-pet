@@ -687,9 +687,9 @@ function App() {
     }
   }
 
-  const handleTriggerNotice = async () => {
+  const handleTriggerNotice = async (noticeType = 'all') => {
     try {
-      await invoke('trigger_notice')
+      await invoke('trigger_notice', { noticeType })
     } catch (e) {
       console.error('Failed to trigger notice:', e)
     }
