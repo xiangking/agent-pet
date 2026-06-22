@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ATLAS_HEIGHT, ATLAS_WIDTH } from './constants'
 
-const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v3'
+const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v4'
 const PANEL_SIZE_STORAGE_KEY = 'agent-pet-panel-sizes-v1'
 const MAX_VISIBLE_USAGE_METRICS = 24
 const NOTICE_CARD_HEIGHT = 96
@@ -9,6 +9,7 @@ const NOTICE_TITLE_HEIGHT = 23
 const NOTICE_OVERFLOW_HEIGHT = 23
 const NOTICE_STACK_GAP = 8
 const NOTICE_TOP_GAP = 12
+const NOTICE_PANEL_MIN_HEIGHT = NOTICE_TITLE_HEIGHT + NOTICE_STACK_GAP + 88
 const NOTICE_PANEL_HEIGHT = NOTICE_TITLE_HEIGHT + NOTICE_STACK_GAP + NOTICE_CARD_HEIGHT * 2 + NOTICE_STACK_GAP * 2
 
 const PANEL_DEFAULT_SIZES = {
@@ -306,7 +307,13 @@ function PetWindow({
   )
   const visibleNotices = notices.slice(0, 8)
   const hiddenNoticeCount = Math.max(0, notices.length - visibleNotices.length)
-  const noticeScrollHeight = Math.max(128, PANEL_DEFAULT_SIZES.notices.height - NOTICE_TITLE_HEIGHT - NOTICE_STACK_GAP)
+  const petTop = windowHeight - displayHeight
+  const noticePanelHeight = clampNumber(
+    Math.min(PANEL_DEFAULT_SIZES.notices.height, petTop - NOTICE_TOP_GAP - 8),
+    Math.min(NOTICE_PANEL_MIN_HEIGHT, Math.max(0, petTop - NOTICE_TOP_GAP - 8)),
+    PANEL_DEFAULT_SIZES.notices.height,
+  )
+  const noticeScrollHeight = Math.max(72, noticePanelHeight - NOTICE_TITLE_HEIGHT - NOTICE_STACK_GAP)
   const stackColors = ['yellow', 'mint', 'peach']
   const [panelPositions, setPanelPositions] = useState(readStoredPanelPositions)
   const [panelSizes, setPanelSizes] = useState(readStoredPanelSizes)
@@ -321,6 +328,10 @@ function PetWindow({
     const storedSize = panelSizes[panel] || {}
     if (!defaultSize) return { width: 0, height: 0 }
 
+    if (panel === 'notices') {
+      return { width: defaultSize.width, height: noticePanelHeight }
+    }
+
     const limits = PANEL_SIZE_LIMITS[panel]
     if (!limits) return defaultSize
 
@@ -332,15 +343,13 @@ function PetWindow({
       width: clampNumber(Number(storedSize.width) || defaultSize.width, limits.minWidth, maxWidth),
       height: clampNumber(Number(storedSize.height) || defaultSize.height, limits.minHeight, maxHeight),
     }
-  }, [panelSizes, windowHeight, windowWidth])
+  }, [noticePanelHeight, panelSizes, windowHeight, windowWidth])
 
   const defaultPanelPositions = useMemo(() => {
-    const petTop = windowHeight - displayHeight
     const headX = windowWidth / 2
     const topGap = 42
     const sideGap = 12
     const noticeWidth = PANEL_DEFAULT_SIZES.notices.width
-    const noticeHeight = PANEL_DEFAULT_SIZES.notices.height
 
     return {
       usage: {
@@ -349,20 +358,23 @@ function PetWindow({
       },
       notices: {
         x: headX - noticeWidth / 2,
-        y: petTop - noticeHeight - NOTICE_TOP_GAP,
+        y: petTop - noticePanelHeight - NOTICE_TOP_GAP,
       },
     }
-  }, [displayHeight, resolvePanelSize, windowHeight, windowWidth])
+  }, [noticePanelHeight, petTop, resolvePanelSize, windowWidth])
 
   const clampPanelPosition = useCallback((panel, position, sizeOverride) => {
     const size = sizeOverride || resolvePanelSize(panel)
     const margin = 8
+    const maxY = panel === 'notices'
+      ? Math.max(margin, petTop - size.height - NOTICE_TOP_GAP)
+      : Math.max(margin, windowHeight - size.height - margin)
 
     return {
       x: Math.min(Math.max(position.x, margin), Math.max(margin, windowWidth - size.width - margin)),
-      y: Math.min(Math.max(position.y, margin), Math.max(margin, windowHeight - size.height - margin)),
+      y: Math.min(Math.max(position.y, margin), maxY),
     }
-  }, [resolvePanelSize, windowHeight, windowWidth])
+  }, [petTop, resolvePanelSize, windowHeight, windowWidth])
 
   const resolvePanelPosition = useCallback((panel) => (
     clampPanelPosition(panel, panelPositions[panel] || defaultPanelPositions[panel])
@@ -732,7 +744,7 @@ function PetWindow({
           className={`notice-stack floating-panel ${draggingPanel === 'notices' ? 'dragging' : ''}`}
           onMouseDown={(event) => handlePanelMouseDown('notices', event)}
           onClick={(event) => event.stopPropagation()}
-          style={{ left: noticePosition.x, top: noticePosition.y }}
+          style={{ left: noticePosition.x, top: noticePosition.y, height: noticePanelHeight }}
         >
           <div className="stack-title">{t('notes')}</div>
           <div
