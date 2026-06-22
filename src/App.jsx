@@ -36,8 +36,8 @@ const POINTER_HIT_SELECTORS = [
   '.usage-dashboard',
   '.notice-stack',
 ]
-const NOTICE_WINDOW_WIDTH = 292
-const NOTICE_WINDOW_HEIGHT = 264
+const NOTICE_WINDOW_WIDTH = 316
+const NOTICE_WINDOW_HEIGHT = 332
 const NOTICE_WINDOW_GAP = 12
 
 const isPointInsideVisiblePetSurface = (x, y) => {
@@ -269,11 +269,8 @@ function App() {
             ])
             const petLogicalPosition = petPosition.toLogical(petScaleFactor)
             const petLogicalSize = petSize.toLogical(petScaleFactor)
-            const placeOnRight = petLogicalPosition.x >= NOTICE_WINDOW_WIDTH + NOTICE_WINDOW_GAP
-            const x = placeOnRight
-              ? petLogicalPosition.x - NOTICE_WINDOW_WIDTH - NOTICE_WINDOW_GAP
-              : petLogicalPosition.x + petLogicalSize.width + NOTICE_WINDOW_GAP
-            const y = Math.max(8, petLogicalPosition.y)
+            const x = Math.max(8, petLogicalPosition.x + (petLogicalSize.width - NOTICE_WINDOW_WIDTH) / 2)
+            const y = Math.max(8, petLogicalPosition.y - NOTICE_WINDOW_HEIGHT - NOTICE_WINDOW_GAP)
             await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
           }
         }

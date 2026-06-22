@@ -4,7 +4,7 @@ import { ATLAS_HEIGHT, ATLAS_WIDTH } from './constants'
 const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v4'
 const PANEL_SIZE_STORAGE_KEY = 'agent-pet-panel-sizes-v1'
 const MAX_VISIBLE_USAGE_METRICS = 24
-const NOTICE_CARD_HEIGHT = 96
+const NOTICE_CARD_HEIGHT = 124
 const NOTICE_TITLE_HEIGHT = 23
 const NOTICE_OVERFLOW_HEIGHT = 23
 const NOTICE_STACK_GAP = 8
@@ -14,7 +14,7 @@ const NOTICE_PANEL_HEIGHT = NOTICE_TITLE_HEIGHT + NOTICE_STACK_GAP + NOTICE_CARD
 
 const PANEL_DEFAULT_SIZES = {
   usage: { width: 304, height: 258 },
-  notices: { width: 268, height: NOTICE_PANEL_HEIGHT },
+  notices: { width: 292, height: NOTICE_PANEL_HEIGHT },
 }
 
 const PANEL_SIZE_LIMITS = {
