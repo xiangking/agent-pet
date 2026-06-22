@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window'
+import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { t as translate } from './locales'
 import PetWindow from './PetWindow'
 import SettingsWindow from './SettingsWindow'
@@ -14,16 +15,107 @@ import {
   EMPTY_LIVE_SOURCE_STATUS,
   FRAME_COUNTS,
   MIN_WINDOW_WIDTH,
+  PET_STAGE_EXTRA_HEIGHT,
+  PET_STAGE_WIDTH,
   STATE_ROWS,
 } from './constants'
+
 const getSpritesheetSource = (petConfig) => {
   return petConfig?.spritesheetDataUrl || petConfig?.spritesheet_data_url || ''
 }
+
+const USAGE_DASHBOARD_PINNED_KEY = 'agent-pet-usage-dashboard-pinned-v1'
+const USAGE_DASHBOARD_AUTO_HIDE_MS = 9000
+const MAX_USAGE_METRICS = 24
+const POINTER_PASSTHROUGH_POLL_MS = 80
+const POINTER_HIT_PADDING = 24
+const POINTER_HIT_SELECTORS = [
+  '.pet-sprite',
+  '.pet-placeholder',
+  '.pet-bubble',
+  '.pet-context-menu',
+  '.usage-dashboard',
+  '.notice-stack',
+]
+
+const isPointInsideVisiblePetSurface = (x, y) => {
+  if (document.body.classList.contains('pet-pointer-capture')) return true
+
+  return POINTER_HIT_SELECTORS.some((selector) => (
+    Array.from(document.querySelectorAll(selector)).some((element) => {
+      const rect = element.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return false
+
+      return x >= rect.left - POINTER_HIT_PADDING
+        && x <= rect.right + POINTER_HIT_PADDING
+        && y >= rect.top - POINTER_HIT_PADDING
+        && y <= rect.bottom + POINTER_HIT_PADDING
+    })
+  ))
+}
+
+const cursorLocalPointCandidates = (cursor, position, scaleFactor) => {
+  const scale = Number(scaleFactor) > 0 ? Number(scaleFactor) : 1
+  return [
+    {
+      x: (cursor.x - position.x) / scale,
+      y: (cursor.y - position.y) / scale,
+    },
+    {
+      x: cursor.x - position.x,
+      y: cursor.y - position.y,
+    },
+    {
+      x: cursor.x / scale - position.x,
+      y: cursor.y / scale - position.y,
+    },
+    {
+      x: cursor.x - position.x / scale,
+      y: cursor.y - position.y / scale,
+    },
+  ]
+}
+
+const readStoredUsageDashboardPinned = () => {
+  try {
+    return window.localStorage.getItem(USAGE_DASHBOARD_PINNED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+const normalizeNotice = (payload = {}) => ({
+  id: payload.id || payload.groupKey || `${payload.source || 'notice'}-${Date.now()}`,
+  groupKey: payload.groupKey || payload.id || '',
+  level: payload.level || 'info',
+  title: payload.title || 'Notice',
+  body: payload.body || '',
+  value: payload.value || '',
+  detail: payload.detail || '',
+  art: payload.art || '',
+  source: payload.source || '',
+  sourceLabel: payload.sourceLabel || '',
+  ttlSeconds: Number.isFinite(Number(payload.ttlSeconds)) ? Number(payload.ttlSeconds) : null,
+  receivedAt: Date.now(),
+})
+
+const normalizeUsageMetric = (payload = {}) => ({
+  id: payload.id || payload.groupKey || `${payload.source || 'usage'}-${payload.label || Date.now()}`,
+  source: payload.source || '',
+  sourceLabel: payload.sourceLabel || payload.source || '',
+  label: payload.label || payload.title || 'Usage',
+  value: payload.value || '',
+  detail: payload.detail || payload.body || '',
+  percent: Number.isFinite(Number(payload.percent)) ? Math.max(0, Math.min(Number(payload.percent), 100)) : null,
+  status: payload.status || payload.level || 'info',
+  meta: payload.meta && typeof payload.meta === 'object' ? payload.meta : {},
+})
 
 function App() {
   const [currentState, setCurrentState] = useState('idle')
   const [currentFrame, setCurrentFrame] = useState(0)
   const [spritesheet, setSpritesheet] = useState('')
+  const [windowLabel, setWindowLabel] = useState('')
   const [isSettings, setIsSettings] = useState(false)
   const [pets, setPets] = useState([])
   const [messageMap, setMessageMap] = useState({})
@@ -39,6 +131,10 @@ function App() {
   const [liveSourcePrefixEnabled, setLiveSourcePrefixEnabled] = useState(false)
   const [petScale, setPetScale] = useState(DEFAULT_PET_SCALE)
   const [bubble, setBubble] = useState(null)
+  const [notices, setNotices] = useState([])
+  const [usageMetrics, setUsageMetrics] = useState([])
+  const [usageDashboardPinned, setUsageDashboardPinned] = useState(readStoredUsageDashboardPinned)
+  const [usageDashboardTemporaryVisible, setUsageDashboardTemporaryVisible] = useState(false)
   const [userPetDir, setUserPetDir] = useState('')
   const [locale, setLocale] = useState('en')
 
@@ -50,16 +146,135 @@ function App() {
   const frameRef = useRef(0)
   const stateRef = useRef('idle')
   const stateStartRef = useRef(Date.now())
+  const windowFrameRef = useRef(null)
+  const usageDashboardPinnedRef = useRef(usageDashboardPinned)
+  const usageDashboardAutoHideTimerRef = useRef(null)
   const displayWidth = CELL_WIDTH * petScale
   const displayHeight = CELL_HEIGHT * petScale
-  const windowWidth = Math.max(displayWidth, MIN_WINDOW_WIDTH)
-  const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT
+  const usageDashboardVisible = usageDashboardPinned || usageDashboardTemporaryVisible
+  const visibleUsageMetrics = usageDashboardVisible ? usageMetrics : []
+  const hasPetPanels = usageDashboardVisible || notices.length > 0
+  const windowWidth = Math.max(displayWidth, MIN_WINDOW_WIDTH, hasPetPanels ? PET_STAGE_WIDTH : 0)
+  const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT + (hasPetPanels ? PET_STAGE_EXTRA_HEIGHT : 0)
+
+  const clearUsageDashboardAutoHide = () => {
+    if (!usageDashboardAutoHideTimerRef.current) return
+    clearTimeout(usageDashboardAutoHideTimerRef.current)
+    usageDashboardAutoHideTimerRef.current = null
+  }
+
+  const scheduleUsageDashboardAutoHide = () => {
+    clearUsageDashboardAutoHide()
+    usageDashboardAutoHideTimerRef.current = setTimeout(() => {
+      if (!usageDashboardPinnedRef.current) {
+        setUsageDashboardTemporaryVisible(false)
+      }
+      usageDashboardAutoHideTimerRef.current = null
+    }, USAGE_DASHBOARD_AUTO_HIDE_MS)
+  }
+
+  const showUsageDashboardTemporarily = () => {
+    if (usageDashboardPinnedRef.current) return
+    setUsageDashboardTemporaryVisible(true)
+    scheduleUsageDashboardAutoHide()
+  }
+
+  useEffect(() => {
+    if (windowLabel !== 'pet') return
+
+    const resizePetWindow = async () => {
+      try {
+        const petWindow = getCurrentWindow()
+        const scaleFactor = await petWindow.scaleFactor()
+        const position = await petWindow.outerPosition()
+        const previousHeight = windowFrameRef.current?.height ?? windowHeight
+        const nextPositionY = position.y + (previousHeight - windowHeight) * scaleFactor
+
+        await petWindow.setSize(new LogicalSize(windowWidth, windowHeight))
+        if (Math.abs(nextPositionY - position.y) > 0.5) {
+          await petWindow.setPosition(new LogicalPosition(position.x / scaleFactor, nextPositionY / scaleFactor))
+        }
+
+        windowFrameRef.current = { width: windowWidth, height: windowHeight }
+      } catch (e) {
+        console.error('Failed to resize pet window:', e)
+      }
+    }
+
+    resizePetWindow()
+  }, [windowHeight, windowLabel, windowWidth])
+
+  useEffect(() => {
+    if (windowLabel !== 'pet') return undefined
+
+    const petWindow = getCurrentWindow()
+    let disposed = false
+    let ignored = false
+    let disabled = false
+
+    const setIgnored = async (nextIgnored) => {
+      if (disabled || ignored === nextIgnored) return
+      try {
+        await petWindow.setIgnoreCursorEvents(nextIgnored)
+        if (!disposed) ignored = nextIgnored
+      } catch (e) {
+        disabled = true
+        console.error('Failed to update pet cursor passthrough:', e)
+      }
+    }
+
+    const updateCursorPassthrough = async () => {
+      if (disposed || disabled) return
+
+      if (!hasPetPanels) {
+        await setIgnored(false)
+        return
+      }
+
+      try {
+        const [cursor, position, scaleFactor] = await Promise.all([
+          cursorPosition(),
+          petWindow.outerPosition(),
+          petWindow.scaleFactor(),
+        ])
+        if (disposed) return
+
+        const isInsidePetSurface = cursorLocalPointCandidates(cursor, position, scaleFactor)
+          .some(({ x, y }) => isPointInsideVisiblePetSurface(x, y))
+
+        await setIgnored(!isInsidePetSurface)
+      } catch (e) {
+        console.error('Failed to poll pet cursor passthrough:', e)
+        await setIgnored(false)
+        disabled = true
+      }
+    }
+
+    updateCursorPassthrough()
+    const timer = window.setInterval(updateCursorPassthrough, POINTER_PASSTHROUGH_POLL_MS)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      petWindow.setIgnoreCursorEvents(false).catch(() => {})
+    }
+  }, [hasPetPanels, windowLabel])
+
+  useEffect(() => {
+    usageDashboardPinnedRef.current = usageDashboardPinned
+    try {
+      window.localStorage.setItem(USAGE_DASHBOARD_PINNED_KEY, String(usageDashboardPinned))
+    } catch {
+      // The setting is still usable for this session if persistence is unavailable.
+    }
+  }, [usageDashboardPinned])
 
   // Determine if this is the settings window
   useEffect(() => {
     const init = async () => {
       const window = getCurrentWebviewWindow()
       const label = await window.label
+      setWindowLabel(label)
       setIsSettings(label === 'settings')
       
       if (label === 'pet') {
@@ -67,6 +282,7 @@ function App() {
         loadPetScale()
         loadPetList()
         loadInitialPet()
+        loadUsageMetrics()
       } else {
         loadPetScale()
         loadPetList()
@@ -123,16 +339,55 @@ function App() {
       }, 4200)
     })
 
+    const unlistenPetNotice = listen('pet-notice', (event) => {
+      const title = event.payload?.title
+      if (!title) return
+
+      const notice = normalizeNotice(event.payload)
+      setNotices((prev) => {
+        const key = notice.groupKey || notice.id
+        const withoutExisting = prev.filter((item) => (item.groupKey || item.id) !== key)
+        return [notice, ...withoutExisting].slice(0, 8)
+      })
+    })
+
+    const unlistenPetUsage = listen('pet-usage', (event) => {
+      const metric = normalizeUsageMetric(event.payload)
+      setUsageMetrics((prev) => {
+        const withoutExisting = prev.filter((item) => item.id !== metric.id)
+        return [metric, ...withoutExisting].slice(0, MAX_USAGE_METRICS)
+      })
+    })
+
     return () => {
       unlistenState.then(f => f())
       unlistenPetLoaded.then(f => f())
       unlistenScaleChanged.then(f => f())
       unlistenCodexBubble.then(f => f())
+      unlistenPetNotice.then(f => f())
+      unlistenPetUsage.then(f => f())
       if (bubbleTimerRef.current) {
         clearTimeout(bubbleTimerRef.current)
       }
+      clearUsageDashboardAutoHide()
     }
   }, [])
+
+  useEffect(() => {
+    if (!notices.some((notice) => notice.ttlSeconds && notice.ttlSeconds > 0)) return undefined
+
+    const timer = setInterval(() => {
+      const now = Date.now()
+      setNotices((prev) => (
+        prev.filter((notice) => {
+          if (!notice.ttlSeconds || notice.ttlSeconds <= 0) return true
+          return now - notice.receivedAt < notice.ttlSeconds * 1000
+        })
+      ))
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [notices])
 
   // Animation loop
   useEffect(() => {
@@ -299,6 +554,16 @@ function App() {
     }
   }
 
+  const loadUsageMetrics = async () => {
+    try {
+      const metrics = await invoke('get_usage_metrics')
+      if (!Array.isArray(metrics) || metrics.length === 0) return
+      setUsageMetrics(metrics.map(normalizeUsageMetric).slice(0, MAX_USAGE_METRICS))
+    } catch (e) {
+      console.error('Failed to load usage metrics:', e)
+    }
+  }
+
   const handleLoadPet = async (petId) => {
     try {
       const pet = await invoke('load_pet', { petId })
@@ -323,6 +588,14 @@ function App() {
       stateStartRef.current = Date.now()
     } catch (e) {
       console.error('Failed to trigger state:', e)
+    }
+  }
+
+  const handleTriggerNotice = async () => {
+    try {
+      await invoke('trigger_notice')
+    } catch (e) {
+      console.error('Failed to trigger notice:', e)
     }
   }
 
@@ -442,11 +715,16 @@ function App() {
 
   const handlePetMouseDown = async (event) => {
     if (event.button !== 0) return
+    document.body.classList.add('pet-pointer-capture')
 
     try {
       await getCurrentWindow().startDragging()
     } catch (e) {
       console.error('Failed to start window drag:', e)
+    } finally {
+      window.setTimeout(() => {
+        document.body.classList.remove('pet-pointer-capture')
+      }, 250)
     }
   }
 
@@ -461,6 +739,49 @@ function App() {
     }
   }
 
+  const handleNoticeDismiss = (event, notice) => {
+    event.stopPropagation()
+    const key = notice.groupKey || notice.id
+    setNotices((prev) => prev.filter((item) => (item.groupKey || item.id) !== key))
+  }
+
+  const handleToggleUsageDashboard = () => {
+    if (usageDashboardVisible) {
+      setUsageDashboardPinned(false)
+      usageDashboardPinnedRef.current = false
+      setUsageDashboardTemporaryVisible(false)
+      clearUsageDashboardAutoHide()
+      return
+    }
+
+    showUsageDashboardTemporarily()
+  }
+
+  const handleToggleUsageDashboardPinned = () => {
+    const nextPinned = !usageDashboardPinnedRef.current
+    usageDashboardPinnedRef.current = nextPinned
+    setUsageDashboardPinned(nextPinned)
+
+    if (nextPinned) {
+      clearUsageDashboardAutoHide()
+      setUsageDashboardTemporaryVisible(false)
+    } else {
+      showUsageDashboardTemporarily()
+    }
+  }
+
+  const handleOpenSettings = async () => {
+    try {
+      await invoke('open_settings_window')
+    } catch (e) {
+      console.error('Failed to open settings window:', e)
+    }
+  }
+
+  if (!windowLabel) {
+    return null
+  }
+
   if (!isSettings) {
     return (
       <PetWindow
@@ -471,11 +792,20 @@ function App() {
         displayWidth={displayWidth}
         getBackgroundPosition={getBackgroundPosition}
         handleBubbleClick={handleBubbleClick}
+        handleNoticeDismiss={handleNoticeDismiss}
+        handleOpenSettings={handleOpenSettings}
         handlePetMouseDown={handlePetMouseDown}
         handleTrigger={handleTrigger}
+        handleToggleUsageDashboard={handleToggleUsageDashboard}
+        handleToggleUsageDashboardPinned={handleToggleUsageDashboardPinned}
+        handleUsageDashboardActivity={showUsageDashboardTemporarily}
+        notices={notices}
         petScale={petScale}
         spritesheet={spritesheet}
         t={t}
+        usageDashboardPinned={usageDashboardPinned}
+        usageDashboardVisible={usageDashboardVisible}
+        usageMetrics={visibleUsageMetrics}
         windowHeight={windowHeight}
         windowWidth={windowWidth}
       />
@@ -495,6 +825,7 @@ function App() {
       handleToggleLiveSourcePrefix={handleToggleLiveSourcePrefix}
       handleToggleWs={handleToggleWs}
       handleTrigger={handleTrigger}
+      handleTriggerNotice={handleTriggerNotice}
       handleUpdateMessageMap={handleUpdateMessageMap}
       liveSourcePrefixEnabled={liveSourcePrefixEnabled}
       liveSourcesStatus={liveSourcesStatus}

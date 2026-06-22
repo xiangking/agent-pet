@@ -4,6 +4,8 @@ export const ATLAS_WIDTH = 1536
 export const ATLAS_HEIGHT = 1872
 export const MIN_WINDOW_WIDTH = 240
 export const BUBBLE_SPACE_HEIGHT = 92
+export const PET_STAGE_WIDTH = 620
+export const PET_STAGE_EXTRA_HEIGHT = 300
 export const CODEX_ORIGINAL_SCALE = 0.45
 export const DEFAULT_PET_SCALE = CODEX_ORIGINAL_SCALE
 

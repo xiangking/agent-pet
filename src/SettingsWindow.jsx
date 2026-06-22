@@ -12,6 +12,7 @@ function SettingsWindow({
   handleToggleLiveSourcePrefix,
   handleToggleWs,
   handleTrigger,
+  handleTriggerNotice,
   handleUpdateMessageMap,
   liveSourcePrefixEnabled,
   liveSourcesStatus,
@@ -198,6 +199,9 @@ function SettingsWindow({
                   {state}
                 </button>
               ))}
+              <button className="button button-primary" onClick={handleTriggerNotice}>
+                {t('testNotice')}
+              </button>
             </div>
           </section>
 

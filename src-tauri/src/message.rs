@@ -19,6 +19,93 @@ pub struct PetMessage {
     pub timestamp: Option<u64>,
 }
 
+/// Longer-lived helpful reminder shown as a card instead of a speech bubble.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PetNotice {
+    /// Stable notice id for replacement/dismissal.
+    #[serde(default)]
+    pub id: String,
+    /// Stable grouping key for upserting related notices.
+    #[serde(default, alias = "groupKey")]
+    pub group_key: String,
+    /// Notice level: info, success, warning, or error.
+    #[serde(default = "default_notice_level")]
+    pub level: String,
+    /// Short card title.
+    #[serde(default = "default_notice_title")]
+    pub title: String,
+    /// Optional supporting text.
+    #[serde(default, alias = "message")]
+    pub body: String,
+    /// Source identifier (e.g., "claude", "codex", "openrouter").
+    #[serde(default)]
+    pub source: String,
+    /// Optional display label for the source.
+    #[serde(default, alias = "sourceLabel")]
+    pub source_label: Option<String>,
+    /// How long the card should remain visible.
+    #[serde(default = "default_notice_ttl_seconds", alias = "ttlSeconds")]
+    pub ttl_seconds: u64,
+    /// Timestamp
+    #[serde(default)]
+    pub timestamp: Option<u64>,
+}
+
+/// Stable usage or quota metric shown in the mini dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PetUsageMetric {
+    /// Stable metric id for replacement/upsert.
+    #[serde(default = "default_usage_id")]
+    pub id: String,
+    /// Source identifier (e.g., "claude", "codex", "openrouter").
+    #[serde(default)]
+    pub source: String,
+    /// Optional display label for the source.
+    #[serde(default, alias = "sourceLabel")]
+    pub source_label: Option<String>,
+    /// Metric label, such as Quota, Balance, or Reset.
+    #[serde(default = "default_usage_label")]
+    pub label: String,
+    /// Display value, such as 18%, $1.24, or 2h.
+    #[serde(default)]
+    pub value: String,
+    /// Optional supporting detail.
+    #[serde(default)]
+    pub detail: String,
+    /// Optional percent for ring/progress visualization.
+    #[serde(default)]
+    pub percent: Option<f64>,
+    /// Metric status: info, success, warning, or error.
+    #[serde(default = "default_notice_level")]
+    pub status: String,
+    /// Optional structured metadata for localized or richer display.
+    #[serde(default)]
+    pub meta: serde_json::Value,
+    /// Timestamp
+    #[serde(default)]
+    pub timestamp: Option<u64>,
+}
+
+fn default_usage_id() -> String {
+    "usage".to_string()
+}
+
+fn default_usage_label() -> String {
+    "Usage".to_string()
+}
+
+fn default_notice_level() -> String {
+    "info".to_string()
+}
+
+fn default_notice_title() -> String {
+    "Notice".to_string()
+}
+
+fn default_notice_ttl_seconds() -> u64 {
+    600
+}
+
 /// Message type constants
 pub const MSG_NEW_MESSAGE: &str = "new_message";
 pub const MSG_MENTION: &str = "mention";
@@ -96,6 +183,41 @@ mod tests {
         let json = r#"{"source": "webhook"}"#;
         let result = serde_json::from_str::<PetMessage>(json);
         assert!(result.is_err(), "message_type 是必填字段，缺失时应解析失败");
+    }
+
+    #[test]
+    fn pet_notice_defaults_optional_fields() {
+        let json = r#"{"kind":"notice","title":"Claude quota low"}"#;
+        let notice: PetNotice = serde_json::from_str(json).unwrap();
+        assert_eq!(notice.level, "info");
+        assert_eq!(notice.title, "Claude quota low");
+        assert_eq!(notice.body, "");
+        assert_eq!(notice.source, "");
+        assert_eq!(notice.id, "");
+        assert_eq!(notice.group_key, "");
+        assert_eq!(notice.ttl_seconds, 600);
+    }
+
+    #[test]
+    fn pet_notice_accepts_camel_case_aliases() {
+        let json = r#"{"kind":"notice","id":"router-balance","groupKey":"router","title":"Low balance","message":"$1.24 left","sourceLabel":"OpenRouter","ttlSeconds":120}"#;
+        let notice: PetNotice = serde_json::from_str(json).unwrap();
+        assert_eq!(notice.id, "router-balance");
+        assert_eq!(notice.group_key, "router");
+        assert_eq!(notice.body, "$1.24 left");
+        assert_eq!(notice.source_label.as_deref(), Some("OpenRouter"));
+        assert_eq!(notice.ttl_seconds, 120);
+    }
+
+    #[test]
+    fn pet_usage_metric_accepts_camel_case_source_label() {
+        let json = r#"{"kind":"usage","id":"claude-quota","sourceLabel":"Claude","label":"Quota","value":"18%","percent":18,"status":"warning"}"#;
+        let metric: PetUsageMetric = serde_json::from_str(json).unwrap();
+        assert_eq!(metric.id, "claude-quota");
+        assert_eq!(metric.source_label.as_deref(), Some("Claude"));
+        assert_eq!(metric.percent, Some(18.0));
+        assert_eq!(metric.status, "warning");
+        assert!(metric.meta.is_null());
     }
 
     // ── 消息类型常量 ──────────────────────────────────────────

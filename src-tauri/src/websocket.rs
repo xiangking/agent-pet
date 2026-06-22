@@ -1,7 +1,7 @@
 // WebSocket server for receiving external messages
 // Accepts JSON messages and forwards to state machine
 
-use crate::message::PetMessage;
+use crate::message::{PetMessage, PetNotice, PetUsageMetric};
 use crate::state_machine::PetStateMachine;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -102,34 +102,15 @@ async fn handle_connection(
             Ok(Message::Text(text)) => {
                 log::debug!("Received: {}", text);
 
-                match serde_json::from_str::<PetMessage>(&text) {
-                    Ok(pet_msg) => {
-                        let mut sm = state_machine.lock().await;
-                        match sm.handle_websocket_message(&pet_msg.message_type) {
-                            Some(new_state) => {
-                                let ack = serde_json::json!({
-                                    "type": "ack",
-                                    "message_type": pet_msg.message_type,
-                                    "current_state": new_state.to_string(),
-                                });
-                                let _ = write.send(Message::Text(ack.to_string())).await;
-                            }
-                            None => {
-                                let disabled = serde_json::json!({
-                                    "type": "disabled",
-                                    "message": "WebSocket message handling is disabled",
-                                    "message_type": pet_msg.message_type,
-                                    "current_state": sm.current_state().to_string(),
-                                });
-                                let _ = write.send(Message::Text(disabled.to_string())).await;
-                            }
-                        }
+                match handle_text_message(&text, &state_machine).await {
+                    Ok(response) => {
+                        let _ = write.send(Message::Text(response.to_string())).await;
                     }
                     Err(e) => {
                         log::warn!("Invalid message format: {}", e);
                         let error = serde_json::json!({
                             "type": "error",
-                            "message": format!("Invalid message: {}", e),
+                            "message": e,
                         });
                         let _ = write.send(Message::Text(error.to_string())).await;
                     }
@@ -149,4 +130,75 @@ async fn handle_connection(
             _ => {}
         }
     }
+}
+
+async fn handle_text_message(
+    text: &str,
+    state_machine: &Arc<Mutex<PetStateMachine>>,
+) -> Result<serde_json::Value, String> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+
+    if message_kind_is(&value, "usage") {
+        let metric: PetUsageMetric = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        let mut sm = state_machine.lock().await;
+        if !sm.websocket_enabled() {
+            return Ok(serde_json::json!({
+                "type": "disabled",
+                "message": "WebSocket message handling is disabled",
+                "current_state": sm.current_state().to_string(),
+            }));
+        }
+
+        sm.upsert_usage_metric(metric.clone());
+        return Ok(serde_json::json!({
+            "type": "ack",
+            "kind": "usage",
+            "id": metric.id,
+            "current_state": sm.current_state().to_string(),
+        }));
+    }
+
+    if message_kind_is(&value, "notice") {
+        let notice: PetNotice = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        let sm = state_machine.lock().await;
+        if !sm.websocket_enabled() {
+            return Ok(serde_json::json!({
+                "type": "disabled",
+                "message": "WebSocket message handling is disabled",
+                "current_state": sm.current_state().to_string(),
+            }));
+        }
+
+        sm.show_notice(&notice);
+        return Ok(serde_json::json!({
+            "type": "ack",
+            "kind": "notice",
+            "title": notice.title,
+            "current_state": sm.current_state().to_string(),
+        }));
+    }
+
+    let pet_msg: PetMessage = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let mut sm = state_machine.lock().await;
+    match sm.handle_websocket_message(&pet_msg.message_type) {
+        Some(new_state) => Ok(serde_json::json!({
+            "type": "ack",
+            "message_type": pet_msg.message_type,
+            "current_state": new_state.to_string(),
+        })),
+        None => Ok(serde_json::json!({
+            "type": "disabled",
+            "message": "WebSocket message handling is disabled",
+            "message_type": pet_msg.message_type,
+            "current_state": sm.current_state().to_string(),
+        })),
+    }
+}
+
+fn message_kind_is(value: &serde_json::Value, expected: &str) -> bool {
+    value
+        .get("kind")
+        .or_else(|| value.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case(expected))
 }

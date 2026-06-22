@@ -16,6 +16,7 @@ use tauri::{Manager, WindowEvent};
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_monitor::CodexMonitor;
+use crate::message::PetNotice;
 use crate::state_machine::{
     default_live_source_focus_targets, default_live_source_paths, PetStateMachine,
 };
@@ -61,6 +62,33 @@ async fn trigger_state(
     let mut sm = state.state_machine.lock().await;
     let new_state = sm.handle_message(&message_type);
     Ok(new_state.to_string())
+}
+
+#[tauri::command]
+async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("settings")
+        .ok_or_else(|| "Settings window not found".to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn trigger_notice(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let sm = state.state_machine.lock().await;
+    sm.show_notice(&PetNotice {
+        id: "manual-test-notice".to_string(),
+        group_key: "manual-test-notice".to_string(),
+        level: "info".to_string(),
+        title: "Manual test".to_string(),
+        body: "Live usage and real notices appear only when a monitored source or WebSocket sends them."
+            .to_string(),
+        source: "manual".to_string(),
+        source_label: Some("Agent Pet".to_string()),
+        ttl_seconds: 60,
+        timestamp: None,
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -245,6 +273,14 @@ async fn get_live_source_prefix_enabled(state: tauri::State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
+async fn get_usage_metrics(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let sm = state.state_machine.lock().await;
+    Ok(sm.usage_metrics_payload())
+}
+
+#[tauri::command]
 async fn get_pet_scale(state: tauri::State<'_, AppState>) -> Result<f64, String> {
     let sm = state.state_machine.lock().await;
     Ok(sm.pet_scale())
@@ -342,6 +378,8 @@ fn main() {
             load_pet,
             get_current_state,
             trigger_state,
+            open_settings_window,
+            trigger_notice,
             get_message_map,
             update_message_map,
             get_websocket_status,
@@ -355,6 +393,7 @@ fn main() {
             focus_live_source,
             set_live_source_prefix_enabled,
             get_live_source_prefix_enabled,
+            get_usage_metrics,
             get_pet_scale,
             set_pet_scale,
             get_language,

@@ -1,7 +1,7 @@
 // Pet state machine
 // Manages state transitions based on messages (animation is handled by the frontend)
 
-use crate::message::default_message_map;
+use crate::message::{default_message_map, PetNotice, PetUsageMetric};
 use crate::pet::{load_pet_config, PetConfig, PetState};
 use crate::settings::{load_settings, save_settings, AppSettings};
 use std::collections::HashMap;
@@ -16,6 +16,7 @@ const CODEX_ORIGINAL_SCALE: f64 = 0.45;
 const DEFAULT_PET_SCALE: f64 = CODEX_ORIGINAL_SCALE;
 const MIN_PET_SCALE: f64 = CODEX_ORIGINAL_SCALE * 0.75;
 const MAX_PET_SCALE: f64 = CODEX_ORIGINAL_SCALE * 1.5;
+const MAX_USAGE_METRICS: usize = 24;
 
 pub struct PetStateMachine {
     app_handle: tauri::AppHandle,
@@ -33,6 +34,7 @@ pub struct PetStateMachine {
     live_source_paths: HashMap<String, String>,
     live_source_focus_targets: HashMap<String, String>,
     live_source_prefix_enabled: bool,
+    usage_metrics: Vec<PetUsageMetric>,
     pet_scale: f64,
     language: String,
 }
@@ -60,6 +62,7 @@ impl PetStateMachine {
             live_source_paths: live_source_paths_from_settings(&settings),
             live_source_focus_targets: live_source_focus_targets_from_settings(&settings),
             live_source_prefix_enabled: settings.live_source_prefix_enabled,
+            usage_metrics: Vec::new(),
             pet_scale: DEFAULT_PET_SCALE,
             language: normalize_language(&settings.language).to_string(),
         }
@@ -261,6 +264,34 @@ impl PetStateMachine {
         if let Some(window) = self.app_handle.get_webview_window("pet") {
             let _ = window.emit("codex-bubble", codex_bubble_payload(text, source));
         }
+    }
+
+    pub fn show_notice(&self, notice: &PetNotice) {
+        if let Some(window) = self.app_handle.get_webview_window("pet") {
+            let _ = window.emit("pet-notice", notice_payload(notice));
+        }
+    }
+
+    pub fn show_usage_metric(&self, metric: &PetUsageMetric) {
+        if let Some(window) = self.app_handle.get_webview_window("pet") {
+            let _ = window.emit("pet-usage", usage_metric_payload(metric));
+        }
+    }
+
+    pub fn upsert_usage_metric(&mut self, metric: PetUsageMetric) {
+        let key = limit_metric_id(&metric.id);
+        self.usage_metrics
+            .retain(|item| limit_metric_id(&item.id) != key);
+        self.usage_metrics.insert(0, metric.clone());
+        self.usage_metrics.truncate(MAX_USAGE_METRICS);
+        self.show_usage_metric(&metric);
+    }
+
+    pub fn usage_metrics_payload(&self) -> Vec<serde_json::Value> {
+        self.usage_metrics
+            .iter()
+            .map(usage_metric_payload)
+            .collect()
     }
 
     pub async fn load_pet(&mut self, pet_id: &str) -> Result<PetConfig, crate::pet::PetError> {
@@ -518,6 +549,119 @@ fn codex_bubble_payload(text: &str, source: &str) -> serde_json::Value {
     })
 }
 
+fn notice_payload(notice: &PetNotice) -> serde_json::Value {
+    let source_label = notice
+        .source_label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+        .map(str::trim)
+        .map(limit_text)
+        .unwrap_or_else(|| source_label(&notice.source).to_string());
+    let group_key = limit_notice_key(&notice.group_key);
+    let id = limit_notice_key(&notice.id);
+    let fallback_id = if !group_key.is_empty() {
+        group_key.clone()
+    } else if !id.is_empty() {
+        id.clone()
+    } else {
+        format!(
+            "{}:{}",
+            notice.source.trim(),
+            limit_text(&notice.title).to_ascii_lowercase()
+        )
+    };
+
+    serde_json::json!({
+        "id": if id.is_empty() { fallback_id } else { id },
+        "groupKey": group_key,
+        "level": normalize_notice_level(&notice.level),
+        "title": limit_text(&notice.title),
+        "body": limit_notice_body(&notice.body),
+        "source": notice.source.trim(),
+        "sourceLabel": source_label,
+        "ttlSeconds": notice.ttl_seconds.clamp(15, 3600),
+        "timestamp": notice.timestamp,
+    })
+}
+
+fn usage_metric_payload(metric: &PetUsageMetric) -> serde_json::Value {
+    let source_label = metric
+        .source_label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+        .map(str::trim)
+        .map(limit_text)
+        .unwrap_or_else(|| source_label(&metric.source).to_string());
+
+    serde_json::json!({
+        "id": limit_metric_id(&metric.id),
+        "source": metric.source.trim(),
+        "sourceLabel": source_label,
+        "label": limit_text(&metric.label),
+        "value": limit_text(&metric.value),
+        "detail": limit_text(&metric.detail),
+        "percent": metric.percent.map(|percent| percent.clamp(0.0, 100.0)),
+        "status": normalize_notice_level(&metric.status),
+        "meta": metric.meta,
+        "timestamp": metric.timestamp,
+    })
+}
+
+fn limit_metric_id(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        "usage".to_string()
+    } else {
+        limit_text(trimmed)
+    }
+}
+
+fn limit_notice_key(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        limit_text(trimmed)
+    }
+}
+
+fn normalize_notice_level(level: &str) -> &str {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "success" => "success",
+        "warning" | "warn" => "warning",
+        "error" | "danger" => "error",
+        _ => "info",
+    }
+}
+
+fn limit_text(text: &str) -> String {
+    const MAX_CHARS: usize = 56;
+    let text = text.trim();
+    let mut chars = text.chars();
+    let shortened: String = chars.by_ref().take(MAX_CHARS).collect();
+
+    if chars.next().is_some() {
+        format!("{}...", shortened.trim_end())
+    } else if shortened.is_empty() {
+        "Notice".to_string()
+    } else {
+        shortened
+    }
+}
+
+fn limit_notice_body(text: &str) -> String {
+    const MAX_CHARS: usize = 140;
+    let text = text.trim();
+    let mut chars = text.chars();
+    let shortened: String = chars.by_ref().take(MAX_CHARS).collect();
+
+    if chars.next().is_some() {
+        format!("{}...", shortened.trim_end())
+    } else {
+        shortened
+    }
+}
+
 #[cfg(test)]
 mod focus_target_tests {
     use super::*;
@@ -566,6 +710,49 @@ mod focus_target_tests {
         assert_eq!(payload["text"], "hello");
         assert_eq!(payload["source"], "codex");
         assert_eq!(payload["sourceLabel"], "Codex");
+    }
+
+    #[test]
+    fn notice_payload_normalizes_level_and_limits_ttl() {
+        let notice = PetNotice {
+            id: "claude-quota-low".to_string(),
+            group_key: "claude-quota".to_string(),
+            level: "warn".to_string(),
+            title: "Claude quota low".to_string(),
+            body: "18% remaining".to_string(),
+            source: "claude".to_string(),
+            source_label: None,
+            ttl_seconds: 2,
+            timestamp: None,
+        };
+        let payload = notice_payload(&notice);
+        assert_eq!(payload["id"], "claude-quota-low");
+        assert_eq!(payload["groupKey"], "claude-quota");
+        assert_eq!(payload["level"], "warning");
+        assert_eq!(payload["sourceLabel"], "Claude Code");
+        assert_eq!(payload["ttlSeconds"], 15);
+    }
+
+    #[test]
+    fn usage_metric_payload_clamps_percent() {
+        let metric = PetUsageMetric {
+            id: "claude-quota".to_string(),
+            source: "claude".to_string(),
+            source_label: Some("Claude".to_string()),
+            label: "Quota".to_string(),
+            value: "118%".to_string(),
+            detail: "reset 2h".to_string(),
+            percent: Some(118.0),
+            status: "warn".to_string(),
+            meta: serde_json::json!({"kind": "short_quota"}),
+            timestamp: None,
+        };
+        let payload = usage_metric_payload(&metric);
+        assert_eq!(payload["id"], "claude-quota");
+        assert_eq!(payload["sourceLabel"], "Claude");
+        assert_eq!(payload["percent"], 100.0);
+        assert_eq!(payload["status"], "warning");
+        assert_eq!(payload["meta"]["kind"], "short_quota");
     }
 
     #[test]
