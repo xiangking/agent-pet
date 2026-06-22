@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { t as translate } from './locales'
 import PetWindow from './PetWindow'
@@ -20,12 +19,31 @@ const getSpritesheetSource = (petConfig) => {
   return petConfig?.spritesheetDataUrl || petConfig?.spritesheet_data_url || ''
 }
 
+const listenSafe = async (eventName, handler) => {
+  try {
+    return await listen(eventName, handler)
+  } catch (e) {
+    console.error(`Failed to listen for ${eventName}:`, e)
+    return () => {}
+  }
+}
+
 function App() {
   const [currentState, setCurrentState] = useState('idle')
   const [currentFrame, setCurrentFrame] = useState(0)
   const [spritesheet, setSpritesheet] = useState('')
-  const [isSettings, setIsSettings] = useState(false)
+  const [windowLabel, setWindowLabel] = useState('')
   const [pets, setPets] = useState([])
+  const [petLibrary, setPetLibrary] = useState([])
+  const [petLibraryPage, setPetLibraryPage] = useState({
+    page: 1,
+    pageSize: 30,
+    total: 0,
+    totalPages: 1,
+    fromCache: false,
+  })
+  const [petLibraryStatus, setPetLibraryStatus] = useState('idle')
+  const [installingPetId, setInstallingPetId] = useState('')
   const [messageMap, setMessageMap] = useState({})
   const [wsStatus, setWsStatus] = useState({ enabled: true, port: 8765 })
   const [liveSourcesStatus, setLiveSourcesStatus] = useState({
@@ -41,6 +59,7 @@ function App() {
   const [bubble, setBubble] = useState(null)
   const [userPetDir, setUserPetDir] = useState('')
   const [locale, setLocale] = useState('en')
+  const [bootError, setBootError] = useState('')
 
   const t = (key, params) => translate(locale, key, params)
   
@@ -58,10 +77,23 @@ function App() {
   // Determine if this is the settings window
   useEffect(() => {
     const init = async () => {
-      const window = getCurrentWebviewWindow()
-      const label = await window.label
-      setIsSettings(label === 'settings')
-      
+      let label = ''
+
+      try {
+        const currentWindow = getCurrentWindow()
+        const rawLabel = currentWindow.label
+        label = typeof rawLabel?.then === 'function' ? await rawLabel : rawLabel
+      } catch (e) {
+        console.error('Failed to read window label:', e)
+        setBootError(String(e))
+      }
+
+      if (!label) {
+        label = globalThis.innerWidth > 420 || globalThis.innerHeight > 360 ? 'settings' : 'pet'
+      }
+
+      setWindowLabel(label)
+
       if (label === 'pet') {
         loadLanguage()
         loadPetScale()
@@ -75,6 +107,7 @@ function App() {
         loadLiveSourcesStatus()
         loadLiveSourcePrefixEnabled()
         loadUserPetDir()
+        loadPetLibrary(1)
         loadLanguage()
       }
     }
@@ -83,7 +116,7 @@ function App() {
 
   // Listen for state changes from backend
   useEffect(() => {
-    const unlistenState = listen('state-changed', (event) => {
+    const unlistenState = listenSafe('state-changed', (event) => {
       const newState = event.payload
       stateRef.current = newState
       setCurrentState(newState)
@@ -93,7 +126,7 @@ function App() {
     })
 
     // Listen for pet-loaded events (e.g. from settings window switching pets)
-    const unlistenPetLoaded = listen('pet-loaded', (event) => {
+    const unlistenPetLoaded = listenSafe('pet-loaded', (event) => {
       const config = event.payload
       const source = getSpritesheetSource(config)
       if (source) {
@@ -101,11 +134,11 @@ function App() {
       }
     })
 
-    const unlistenScaleChanged = listen('pet-scale-changed', (event) => {
+    const unlistenScaleChanged = listenSafe('pet-scale-changed', (event) => {
       setPetScale(event.payload || DEFAULT_PET_SCALE)
     })
 
-    const unlistenCodexBubble = listen('codex-bubble', (event) => {
+    const unlistenCodexBubble = listenSafe('codex-bubble', (event) => {
       const text = event.payload?.text
       if (!text) return
 
@@ -136,7 +169,7 @@ function App() {
 
   // Animation loop
   useEffect(() => {
-    if (isSettings || !spritesheet) return
+    if (windowLabel !== 'pet' || !spritesheet) return
 
     const animate = (timestamp) => {
       const durations = getStateDurations(stateRef.current)
@@ -174,7 +207,7 @@ function App() {
         cancelAnimationFrame(animRef.current)
       }
     }
-  }, [spritesheet, isSettings])
+  }, [spritesheet, windowLabel])
 
   const getStateDurations = (state) => {
     const durations = {
@@ -229,6 +262,31 @@ function App() {
     } catch (e) {
       console.error('Failed to load pets:', e)
     }
+  }
+
+  const loadPetLibrary = async (page = petLibraryPage.page || 1) => {
+    setPetLibraryStatus('loading')
+    try {
+      const result = await invoke('get_pet_library', { page })
+      const items = Array.isArray(result?.items) ? result.items : Array.isArray(result) ? result : []
+      setPetLibrary(items)
+      setPetLibraryPage({
+        page: Number(result?.page) || page || 1,
+        pageSize: Number(result?.pageSize || result?.page_size) || items.length || 30,
+        total: Number(result?.total) || items.length,
+        totalPages: Number(result?.totalPages || result?.total_pages) || 1,
+        fromCache: Boolean(result?.fromCache || result?.from_cache),
+      })
+      setPetLibraryStatus('ready')
+    } catch (e) {
+      console.error('Failed to load pet library:', e)
+      setPetLibraryStatus('error')
+    }
+  }
+
+  const handleChangePetLibraryPage = (page) => {
+    const nextPage = Math.max(1, Math.min(Number(page) || 1, petLibraryPage.totalPages || 1))
+    loadPetLibrary(nextPage)
   }
 
   const loadUserPetDir = async () => {
@@ -310,6 +368,22 @@ function App() {
       loadPetList() // Refresh list to show active
     } catch (e) {
       console.error('Failed to load pet:', e)
+    }
+  }
+
+  const handleInstallLibraryPet = async (petId) => {
+    if (!petId || installingPetId) return
+
+    setInstallingPetId(petId)
+    try {
+      await invoke('install_library_pet', { petId })
+      await loadPetList()
+      await loadPetLibrary(petLibraryPage.page)
+      await handleLoadPet(petId)
+    } catch (e) {
+      console.error('Failed to install pet:', e)
+    } finally {
+      setInstallingPetId('')
     }
   }
 
@@ -461,7 +535,15 @@ function App() {
     }
   }
 
-  if (!isSettings) {
+  if (!windowLabel) {
+    return (
+      <div className="settings-container">
+        <div className="empty-state">{bootError || t('loading')}</div>
+      </div>
+    )
+  }
+
+  if (windowLabel !== 'settings') {
     return (
       <PetWindow
         bubble={bubble}
@@ -487,6 +569,9 @@ function App() {
       handleChangeLiveSourceFocusTarget={handleChangeLiveSourceFocusTarget}
       handleChangeLiveSourcePath={handleChangeLiveSourcePath}
       handleLoadPet={handleLoadPet}
+      handleInstallLibraryPet={handleInstallLibraryPet}
+      handleChangePetLibraryPage={handleChangePetLibraryPage}
+      handleRefreshPetLibrary={loadPetLibrary}
       handleResetLiveSourcePath={handleResetLiveSourcePath}
       handleSaveLiveSourcePath={handleSaveLiveSourcePath}
       handleSetPetScale={handleSetPetScale}
@@ -501,7 +586,11 @@ function App() {
       locale={locale}
       messageMap={messageMap}
       pets={pets}
+      petLibrary={petLibrary}
+      petLibraryPage={petLibraryPage}
+      petLibraryStatus={petLibraryStatus}
       petScale={petScale}
+      installingPetId={installingPetId}
       t={t}
       userPetDir={userPetDir}
       wsStatus={wsStatus}

@@ -1,7 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, Runtime,
+    Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder,
 };
 
 fn tray_label(language: &str, key: &str) -> String {
@@ -13,6 +13,30 @@ fn tray_label(language: &str, key: &str) -> String {
         (_, "settings") => "Settings".to_string(),
         (_, "reload") => "Reload Pet".to_string(),
         _ => key.to_string(),
+    }
+}
+
+pub fn show_settings_window<R: Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.eval("window.location.reload()");
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+        .title("Agent Pet Settings")
+        .inner_size(860.0, 720.0)
+        .center()
+        .visible(true)
+        .build()
+    {
+        Ok(window) => {
+            let _ = window.set_focus();
+        }
+        Err(error) => {
+            log::error!("Failed to open settings window: {error}");
+        }
     }
 }
 
@@ -95,10 +119,7 @@ fn build_tray<R: Runtime>(
                 app.exit(0);
             }
             "settings" => {
-                if let Some(window) = app.get_webview_window("settings") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_settings_window(app);
             }
             "reload" => {
                 if let Some(window) = app.get_webview_window("pet") {
