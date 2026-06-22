@@ -43,6 +43,7 @@ const NOTICE_CARD_HEIGHT = 124
 const NOTICE_CARD_GAP = 8
 const NOTICE_WINDOW_VERTICAL_PADDING = 16
 const PET_GEOMETRY_STORAGE_KEY = 'agent-pet-current-geometry-v1'
+const NOTICE_WINDOW_MANUAL_KEY = 'agent-pet-notice-window-manual-v1'
 
 const isPointInsideVisiblePetSurface = (x, y) => {
   if (document.body.classList.contains('pet-pointer-capture')) return true
@@ -328,6 +329,8 @@ function App() {
           : 1
         if (!hasNotices) return
 
+        if (window.sessionStorage.getItem(NOTICE_WINDOW_MANUAL_KEY) === 'true') return
+
         const geometry = readPetGeometry()
         if (geometry) {
           const noticeScaleFactor = await noticeWindow.scaleFactor()
@@ -358,6 +361,8 @@ function App() {
 
         if (hasNotices) {
           await emit('request-pet-geometry')
+          if (window.sessionStorage.getItem(NOTICE_WINDOW_MANUAL_KEY) === 'true') return
+
           const geometry = readPetGeometry()
           if (geometry) {
             const noticeScaleFactor = await noticeWindow.scaleFactor()

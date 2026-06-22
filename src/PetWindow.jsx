@@ -3,6 +3,7 @@ import { ATLAS_HEIGHT, ATLAS_WIDTH } from './constants'
 
 const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v4'
 const PANEL_SIZE_STORAGE_KEY = 'agent-pet-panel-sizes-v1'
+const NOTICE_WINDOW_MANUAL_KEY = 'agent-pet-notice-window-manual-v1'
 const MAX_VISIBLE_USAGE_METRICS = 24
 const NOTICE_CARD_HEIGHT = 124
 const NOTICE_TITLE_HEIGHT = 23
@@ -554,6 +555,27 @@ function PetWindow({
     setDraggingPanel(panel)
   }
 
+  const handleNoticeWindowMouseDown = async (event) => {
+    if (event.button !== 0) return
+    if (event.target.closest?.('button, input, select, textarea, a')) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    document.body.classList.add('pet-pointer-capture')
+    try {
+      window.sessionStorage.setItem(NOTICE_WINDOW_MANUAL_KEY, 'true')
+    } catch {
+      // Dragging still works for the current gesture if persistence is unavailable.
+    }
+    try {
+      await getCurrentWindow().startDragging()
+    } catch (e) {
+      console.error('Failed to drag notice window:', e)
+    } finally {
+      document.body.classList.remove('pet-pointer-capture')
+    }
+  }
+
   const handlePanelResizeMouseDown = (panel, edge, event) => {
     if (event.button !== 0) return
     event.preventDefault()
@@ -749,7 +771,7 @@ function PetWindow({
       {visibleNotices.length > 0 && (
         <div
           className={`notice-stack floating-panel ${draggingPanel === 'notices' ? 'dragging' : ''}`}
-          onMouseDown={noticeOnly ? (event) => event.stopPropagation() : (event) => handlePanelMouseDown('notices', event)}
+          onMouseDown={noticeOnly ? handleNoticeWindowMouseDown : (event) => handlePanelMouseDown('notices', event)}
           onClick={(event) => event.stopPropagation()}
           style={{ left: noticePosition.x, top: noticePosition.y, height: noticePanelHeight }}
         >
