@@ -291,6 +291,7 @@ function PetWindow({
   handleToggleUsageDashboardPinned,
   handleUsageDashboardActivity,
   notices,
+  noticeOnly = false,
   petScale,
   spritesheet,
   t,
@@ -308,11 +309,13 @@ function PetWindow({
   const visibleNotices = notices.slice(0, 8)
   const hiddenNoticeCount = Math.max(0, notices.length - visibleNotices.length)
   const petTop = windowHeight - displayHeight
-  const noticePanelHeight = clampNumber(
-    Math.min(PANEL_DEFAULT_SIZES.notices.height, petTop - NOTICE_TOP_GAP - 8),
-    Math.min(NOTICE_PANEL_MIN_HEIGHT, Math.max(0, petTop - NOTICE_TOP_GAP - 8)),
-    PANEL_DEFAULT_SIZES.notices.height,
-  )
+  const noticePanelHeight = noticeOnly
+    ? PANEL_DEFAULT_SIZES.notices.height
+    : clampNumber(
+      Math.min(PANEL_DEFAULT_SIZES.notices.height, petTop - NOTICE_TOP_GAP - 8),
+      Math.min(NOTICE_PANEL_MIN_HEIGHT, Math.max(0, petTop - NOTICE_TOP_GAP - 8)),
+      PANEL_DEFAULT_SIZES.notices.height,
+    )
   const noticeScrollHeight = Math.max(72, noticePanelHeight - NOTICE_TITLE_HEIGHT - NOTICE_STACK_GAP)
   const stackColors = ['yellow', 'mint', 'peach']
   const [panelPositions, setPanelPositions] = useState(readStoredPanelPositions)
@@ -356,17 +359,19 @@ function PetWindow({
         x: headX - resolvePanelSize('usage').width - sideGap,
         y: petTop - resolvePanelSize('usage').height - topGap,
       },
-      notices: {
-        x: headX - noticeWidth / 2,
-        y: petTop - noticePanelHeight - NOTICE_TOP_GAP,
-      },
+      notices: noticeOnly
+        ? { x: 10, y: 8 }
+        : {
+          x: headX - noticeWidth / 2,
+          y: petTop - noticePanelHeight - NOTICE_TOP_GAP,
+        },
     }
-  }, [noticePanelHeight, petTop, resolvePanelSize, windowWidth])
+  }, [noticeOnly, noticePanelHeight, petTop, resolvePanelSize, windowWidth])
 
   const clampPanelPosition = useCallback((panel, position, sizeOverride) => {
     const size = sizeOverride || resolvePanelSize(panel)
     const margin = 8
-    const maxY = panel === 'notices'
+    const maxY = panel === 'notices' && !noticeOnly
       ? Math.max(margin, petTop - size.height - NOTICE_TOP_GAP)
       : Math.max(margin, windowHeight - size.height - margin)
 
@@ -374,7 +379,7 @@ function PetWindow({
       x: Math.min(Math.max(position.x, margin), Math.max(margin, windowWidth - size.width - margin)),
       y: Math.min(Math.max(position.y, margin), maxY),
     }
-  }, [petTop, resolvePanelSize, windowHeight, windowWidth])
+  }, [noticeOnly, petTop, resolvePanelSize, windowHeight, windowWidth])
 
   const resolvePanelPosition = useCallback((panel) => (
     clampPanelPosition(panel, panelPositions[panel] || defaultPanelPositions[panel])
@@ -615,12 +620,12 @@ function PetWindow({
 
   return (
     <div
-      className="pet-container"
+      className={noticeOnly ? 'pet-container notice-window-container' : 'pet-container'}
       style={{ width: windowWidth, height: windowHeight, '--pet-display-height': `${displayHeight}px` }}
-      onClick={handleContainerClick}
-      onContextMenu={handleContextMenu}
+      onClick={noticeOnly ? undefined : handleContainerClick}
+      onContextMenu={noticeOnly ? undefined : handleContextMenu}
     >
-      {contextMenu && (
+      {!noticeOnly && contextMenu && (
         <div
           className="pet-context-menu"
           onMouseDown={(event) => event.stopPropagation()}
@@ -648,7 +653,7 @@ function PetWindow({
         </div>
       )}
 
-      {usageDashboardVisible && (
+      {!noticeOnly && usageDashboardVisible && (
         <div
           className={[
             'usage-dashboard floating-panel',
@@ -742,7 +747,7 @@ function PetWindow({
       {visibleNotices.length > 0 && (
         <div
           className={`notice-stack floating-panel ${draggingPanel === 'notices' ? 'dragging' : ''}`}
-          onMouseDown={(event) => handlePanelMouseDown('notices', event)}
+          onMouseDown={noticeOnly ? (event) => event.stopPropagation() : (event) => handlePanelMouseDown('notices', event)}
           onClick={(event) => event.stopPropagation()}
           style={{ left: noticePosition.x, top: noticePosition.y, height: noticePanelHeight }}
         >
@@ -810,7 +815,7 @@ function PetWindow({
         </div>
       )}
 
-      {bubble?.text && (
+      {!noticeOnly && bubble?.text && (
         <div
           className={`pet-bubble ${bubble.source ? 'clickable' : ''}`}
           onMouseDown={(event) => event.stopPropagation()}
@@ -820,7 +825,7 @@ function PetWindow({
           {bubble.text}
         </div>
       )}
-      {spritesheet ? (
+      {!noticeOnly && spritesheet ? (
         <div
           className="pet-sprite"
           onMouseDown={handlePetMouseDown}
@@ -832,7 +837,7 @@ function PetWindow({
             height: displayHeight,
           }}
         />
-      ) : (
+      ) : !noticeOnly ? (
         <div
           className="pet-placeholder"
           onMouseDown={handlePetMouseDown}
@@ -843,7 +848,7 @@ function PetWindow({
         >
           {t('noLoaded')}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

@@ -433,6 +433,10 @@ fn main() {
             if let Some(window) = app.get_webview_window("pet") {
                 let _ = window.show();
             }
+            if let Some(window) = app.get_webview_window("notices") {
+                let _ = window.show();
+                let _ = window.set_ignore_cursor_events(true);
+            }
             if std::env::var("AGENT_PET_SHOW_SETTINGS").ok().as_deref() == Some("1") {
                 tray::show_settings_window(&app_handle);
             }

@@ -28,6 +28,15 @@ body {
   cursor: grabbing;
 }
 
+.notice-window-container,
+.notice-window-container:active {
+  cursor: default;
+}
+
+.notice-window-container .notice-stack {
+  animation: panel-pop-right 0.2s ease-out;
+}
+
 .pet-sprite {
   width: 86px;
   height: 94px;

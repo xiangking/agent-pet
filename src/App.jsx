@@ -194,7 +194,7 @@ function App() {
   const displayHeight = CELL_HEIGHT * petScale
   const usageDashboardVisible = usageDashboardPinned || usageDashboardTemporaryVisible
   const visibleUsageMetrics = usageDashboardVisible ? usageMetrics : []
-  const hasPetPanels = usageDashboardVisible || notices.length > 0
+  const hasPetPanels = usageDashboardVisible
   const windowWidth = Math.max(displayWidth, MIN_WINDOW_WIDTH, hasPetPanels ? PET_STAGE_WIDTH : 0)
   const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT + (hasPetPanels ? PET_STAGE_EXTRA_HEIGHT : 0)
 
@@ -244,6 +244,23 @@ function App() {
 
     resizePetWindow()
   }, [windowHeight, windowLabel, windowWidth])
+
+  useEffect(() => {
+    if (windowLabel !== 'notices') return
+
+    const resizeNoticeWindow = async () => {
+      try {
+        const noticeWindow = getCurrentWindow()
+        const hasNotices = notices.length > 0
+        await noticeWindow.setSize(new LogicalSize(292, hasNotices ? 264 : 1))
+        await noticeWindow.setIgnoreCursorEvents(!hasNotices)
+      } catch (e) {
+        console.error('Failed to resize notice window:', e)
+      }
+    }
+
+    resizeNoticeWindow()
+  }, [notices.length, windowLabel])
 
   useEffect(() => {
     if (windowLabel !== 'pet') return undefined
@@ -329,6 +346,11 @@ function App() {
       }
 
       setWindowLabel(label)
+
+      if (label === 'notices') {
+        loadLanguage()
+        return
+      }
 
       if (label === 'pet') {
         loadLanguage()
@@ -896,6 +918,38 @@ function App() {
     )
   }
 
+  if (windowLabel === 'notices') {
+    return (
+      <PetWindow
+        bubble={null}
+        currentState={currentState}
+        currentFrame={currentFrame}
+        displayHeight={displayHeight}
+        displayWidth={displayWidth}
+        getBackgroundPosition={getBackgroundPosition}
+        handleBubbleClick={handleBubbleClick}
+        handleNoticeAction={handleNoticeAction}
+        handleNoticeDismiss={handleNoticeDismiss}
+        handleOpenSettings={handleOpenSettings}
+        handlePetMouseDown={handlePetMouseDown}
+        handleTrigger={handleTrigger}
+        handleToggleUsageDashboard={handleToggleUsageDashboard}
+        handleToggleUsageDashboardPinned={handleToggleUsageDashboardPinned}
+        handleUsageDashboardActivity={showUsageDashboardTemporarily}
+        notices={notices}
+        noticeOnly
+        petScale={petScale}
+        spritesheet=""
+        t={t}
+        usageDashboardPinned={usageDashboardPinned}
+        usageDashboardVisible={false}
+        usageMetrics={[]}
+        windowHeight={264}
+        windowWidth={292}
+      />
+    )
+  }
+
   if (windowLabel !== 'settings') {
     return (
       <PetWindow
@@ -914,7 +968,7 @@ function App() {
         handleToggleUsageDashboard={handleToggleUsageDashboard}
         handleToggleUsageDashboardPinned={handleToggleUsageDashboardPinned}
         handleUsageDashboardActivity={showUsageDashboardTemporarily}
-        notices={notices}
+        notices={[]}
         petScale={petScale}
         spritesheet={spritesheet}
         t={t}

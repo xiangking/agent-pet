@@ -267,7 +267,8 @@ impl PetStateMachine {
     }
 
     pub fn show_notice(&self, notice: &PetNotice) {
-        if let Some(window) = self.app_handle.get_webview_window("pet") {
+        if let Some(window) = self.app_handle.get_webview_window("notices") {
+            let _ = window.show();
             let _ = window.emit("pet-notice", notice_payload(notice));
         }
     }

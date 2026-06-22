@@ -33,6 +33,21 @@
         "width": 860,
         "height": 720,
         "visible": false
+      },
+      {
+        "label": "notices",
+        "title": "Agent Pet Notices",
+        "x": 120,
+        "y": 48,
+        "width": 292,
+        "height": 264,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "shadow": false
       }
     ],
     "security": {
@@ -40,7 +55,7 @@
       "capabilities": [
         {
           "identifier": "default",
-          "windows": ["pet", "settings"],
+          "windows": ["pet", "settings", "notices"],
           "permissions": [
             "core:default",
             "core:window:allow-cursor-position",
