@@ -850,30 +850,24 @@ fn activity_notice(source: &str, activity: &CodexActivity) -> Option<PetNotice> 
         .as_deref()
         .filter(|text| !text.trim().is_empty())
         .unwrap_or("");
-    let (level, title, notice_type, action_hint) = match activity.message_type {
+    let (level, notice_type) = match activity.message_type {
         MSG_WAITING_INPUT => notice_action_for_waiting_input(body),
-        MSG_PROCESSING if looks_like_context_compacting(body) => (
-            "info",
-            "正在整理上下文",
-            "context_compacting",
-            Some("等待完成"),
-        ),
-        MSG_ERROR => ("error", "任务失败", "task_failed", Some("查看来源")),
+        MSG_PROCESSING if looks_like_context_compacting(body) => ("info", "context_compacting"),
+        MSG_ERROR => ("error", "task_failed"),
         _ => return None,
     };
     let source_label = source_label(source).to_string();
-    let body = if body.is_empty() { title } else { body };
 
     Some(PetNotice {
         id: format!("{}-{}", source, activity.message_type.replace('_', "-")),
         group_key: format!("{}-{}", source, activity.message_type.replace('_', "-")),
         level: level.to_string(),
-        title: title.to_string(),
+        title: String::new(),
         body: body.to_string(),
         source: source.to_string(),
         source_label: Some(source_label),
         notice_type: notice_type.to_string(),
-        action_hint: action_hint.map(str::to_string),
+        action_hint: None,
         action_label: None,
         focus_source: true,
         action_kind: Some("focus".to_string()),
@@ -883,43 +877,21 @@ fn activity_notice(source: &str, activity: &CodexActivity) -> Option<PetNotice> 
     })
 }
 
-fn notice_action_for_waiting_input(
-    text: &str,
-) -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    Option<&'static str>,
-) {
+fn notice_action_for_waiting_input(text: &str) -> (&'static str, &'static str) {
     if looks_like_press_enter_prompt(text) {
-        return ("warning", "等待继续", "press_enter_required", Some("Enter"));
+        return ("warning", "press_enter_required");
     }
     if looks_like_approval_prompt(text) {
-        return (
-            "warning",
-            "需要批准",
-            "approval_required",
-            Some("Allow / Deny"),
-        );
+        return ("warning", "approval_required");
     }
     if looks_like_confirm_prompt(text) {
-        return ("warning", "需要确认", "confirm_required", Some("Y + Enter"));
+        return ("warning", "confirm_required");
     }
     if looks_like_context_compacting(text) {
-        return (
-            "info",
-            "正在整理上下文",
-            "context_compacting",
-            Some("等待完成"),
-        );
+        return ("info", "context_compacting");
     }
 
-    (
-        "warning",
-        "需要你处理",
-        "confirm_required",
-        Some("查看来源"),
-    )
+    ("warning", "confirm_required")
 }
 
 fn looks_like_approval_prompt(text: &str) -> bool {
@@ -1766,16 +1738,12 @@ fn tool_call_approval_activity(payload: &Value) -> Option<CodexActivity> {
         .get("name")
         .and_then(Value::as_str)
         .unwrap_or("tool");
-    let reason = approval_reason(&arguments).unwrap_or_else(|| {
-        format!(
-            "{} 需要你确认后才能继续。",
-            codex_tool_display_name(tool_name)
-        )
-    });
+    let reason = approval_reason(&arguments)
+        .unwrap_or_else(|| codex_tool_display_name(tool_name).to_string());
 
     Some(CodexActivity {
         message_type: MSG_WAITING_INPUT,
-        bubble_text: Some(format!("需要批准：{}", reason.trim())),
+        bubble_text: Some(reason.trim().to_string()),
         origin: ActivityOrigin::Assistant,
         usage: None,
         usage_metrics: Vec::new(),
@@ -3049,14 +3017,14 @@ mod tests {
         assert!(activity.affects_state);
         assert_eq!(
             activity.bubble_text.as_deref(),
-            Some("需要批准：需要读取工作区外的 ~/.local/share/opencode 目录来确认 opencode 真实数据源结构，是否允许？")
+            Some("需要读取工作区外的 ~/.local/share/opencode 目录来确认 opencode 真实数据源结构，是否允许？")
         );
 
         let notice = activity_notice("codex", &activity).unwrap();
         assert_eq!(notice.level, "warning");
-        assert_eq!(notice.title, "需要批准");
+        assert_eq!(notice.title, "");
         assert_eq!(notice.notice_type, "approval_required");
-        assert_eq!(notice.action_hint.as_deref(), Some("Allow / Deny"));
+        assert_eq!(notice.action_hint, None);
         assert_eq!(notice.action_label, None);
         assert!(notice.focus_source);
         assert_eq!(notice.action_kind.as_deref(), Some("focus"));
@@ -3077,8 +3045,8 @@ mod tests {
 
         let notice = activity_notice("claude", &activity).unwrap();
         assert_eq!(notice.notice_type, "confirm_required");
-        assert_eq!(notice.title, "需要确认");
-        assert_eq!(notice.action_hint.as_deref(), Some("Y + Enter"));
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
         assert_eq!(notice.source_label.as_deref(), Some("Claude Code"));
     }
 
@@ -3095,8 +3063,8 @@ mod tests {
 
         let notice = activity_notice("opencode", &activity).unwrap();
         assert_eq!(notice.notice_type, "press_enter_required");
-        assert_eq!(notice.title, "等待继续");
-        assert_eq!(notice.action_hint.as_deref(), Some("Enter"));
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
     }
 
     #[test]
@@ -3113,8 +3081,8 @@ mod tests {
         let notice = activity_notice("hermes", &activity).unwrap();
         assert_eq!(notice.level, "info");
         assert_eq!(notice.notice_type, "context_compacting");
-        assert_eq!(notice.title, "正在整理上下文");
-        assert_eq!(notice.action_hint.as_deref(), Some("等待完成"));
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
     }
 
     #[test]
@@ -3131,8 +3099,8 @@ mod tests {
         let notice = activity_notice("openclaw", &activity).unwrap();
         assert_eq!(notice.level, "error");
         assert_eq!(notice.notice_type, "task_failed");
-        assert_eq!(notice.title, "任务失败");
-        assert_eq!(notice.action_hint.as_deref(), Some("查看来源"));
+        assert_eq!(notice.title, "");
+        assert_eq!(notice.action_hint, None);
     }
 
     #[test]

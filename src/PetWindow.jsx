@@ -70,6 +70,18 @@ const noticeTypeLabel = (type, locale) => {
   return labels[type]?.[locale] || labels.info[locale] || labels.info.en
 }
 
+const noticeTranslationKeySuffix = (type) => {
+  const suffixes = {
+    approval_required: 'ApprovalRequired',
+    confirm_required: 'ConfirmRequired',
+    press_enter_required: 'PressEnterRequired',
+    context_compacting: 'ContextCompacting',
+    task_failed: 'TaskFailed',
+    info: 'Info',
+  }
+  return suffixes[type] || suffixes.info
+}
+
 const formatWindowLabel = (minutes, locale) => {
   const value = Number(minutes)
   if (!Number.isFinite(value) || value <= 0) return ''
@@ -732,6 +744,9 @@ function PetWindow({
           {visibleNotices.map((item, index) => {
             const value = item.value || item.detail || ''
             const hasAction = item.focusSource || item.actionKind || item.actionLabel || item.actionHint
+            const noticeSuffix = noticeTranslationKeySuffix(item.noticeType || 'info')
+            const displayTitle = item.title || t(`noticeTitle${noticeSuffix}`)
+            const displayActionHint = item.actionHint || t(`noticeHint${noticeSuffix}`)
             return (
               <div
                 className={`sticky-notice sticky-${item.level || 'info'} sticky-type-${item.noticeType || 'info'} sticky-paper-${stackColors[index % stackColors.length]}`}
@@ -755,12 +770,12 @@ function PetWindow({
                 </div>
                 <div className="sticky-main">
                   <div className="sticky-copy">
-                    <div className="sticky-title">{item.title}</div>
+                    <div className="sticky-title">{displayTitle}</div>
                     {value && <div className="sticky-value">{value}</div>}
                     {item.body && <div className="sticky-body">{item.body}</div>}
-                    {(item.actionHint || hasAction) && (
+                    {(displayActionHint || hasAction) && (
                       <div className="sticky-action-row">
-                        {item.actionHint && <span className="sticky-action-hint">{item.actionHint}</span>}
+                        {displayActionHint && <span className="sticky-action-hint">{displayActionHint}</span>}
                         {hasAction && item.source && handleNoticeAction && (
                           <button
                             type="button"
