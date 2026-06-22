@@ -97,6 +97,12 @@ async fn trigger_notice(state: tauri::State<'_, AppState>) -> Result<(), String>
             .to_string(),
         source: "manual".to_string(),
         source_label: Some("Agent Pet".to_string()),
+        notice_type: "info".to_string(),
+        action_hint: Some("Focus the related app when available".to_string()),
+        action_label: Some("Review".to_string()),
+        focus_source: false,
+        action_kind: Some("focus".to_string()),
+        automation_safe: false,
         ttl_seconds: 60,
         timestamp: None,
     });
@@ -270,6 +276,26 @@ async fn focus_live_source(
 }
 
 #[tauri::command]
+async fn handle_notice_action(
+    state: tauri::State<'_, AppState>,
+    source: String,
+    action_kind: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let action = action_kind.unwrap_or_else(|| "focus".to_string());
+    match action.as_str() {
+        "focus" | "press_enter" | "type_yes_enter" | "select_allow" => {
+            focus_live_source(state, source).await?;
+            Ok(serde_json::json!({
+                "status": if action == "focus" { "focused" } else { "manual_required" },
+                "performedAction": "focus",
+                "requestedAction": action,
+            }))
+        }
+        _ => Err(format!("Unsupported notice action: {}", action)),
+    }
+}
+
+#[tauri::command]
 async fn set_live_source_prefix_enabled(
     state: tauri::State<'_, AppState>,
     enabled: bool,
@@ -408,6 +434,7 @@ fn main() {
             set_live_source_path,
             set_live_source_focus_target,
             focus_live_source,
+            handle_notice_action,
             set_live_source_prefix_enabled,
             get_live_source_prefix_enabled,
             get_usage_metrics,

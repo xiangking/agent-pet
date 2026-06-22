@@ -579,6 +579,12 @@ fn notice_payload(notice: &PetNotice) -> serde_json::Value {
         "body": limit_notice_body(&notice.body),
         "source": notice.source.trim(),
         "sourceLabel": source_label,
+        "noticeType": normalize_notice_type(&notice.notice_type),
+        "actionHint": notice.action_hint.as_deref().map(limit_text),
+        "actionLabel": notice.action_label.as_deref().map(limit_text),
+        "focusSource": notice.focus_source,
+        "actionKind": notice.action_kind.as_deref().map(normalize_notice_action_kind),
+        "automationSafe": notice.automation_safe,
         "ttlSeconds": notice.ttl_seconds.clamp(15, 3600),
         "timestamp": notice.timestamp,
     })
@@ -631,6 +637,28 @@ fn normalize_notice_level(level: &str) -> &str {
         "warning" | "warn" => "warning",
         "error" | "danger" => "error",
         _ => "info",
+    }
+}
+
+fn normalize_notice_type(notice_type: &str) -> &str {
+    match notice_type.trim().to_ascii_lowercase().as_str() {
+        "approval_required" => "approval_required",
+        "confirm_required" => "confirm_required",
+        "press_enter_required" => "press_enter_required",
+        "context_compacting" => "context_compacting",
+        "task_failed" => "task_failed",
+        "info" => "info",
+        _ => "info",
+    }
+}
+
+fn normalize_notice_action_kind(action_kind: &str) -> &str {
+    match action_kind.trim().to_ascii_lowercase().as_str() {
+        "focus" => "focus",
+        "press_enter" => "press_enter",
+        "type_yes_enter" => "type_yes_enter",
+        "select_allow" => "select_allow",
+        _ => "focus",
     }
 }
 
@@ -722,6 +750,12 @@ mod focus_target_tests {
             body: "18% remaining".to_string(),
             source: "claude".to_string(),
             source_label: None,
+            notice_type: "approval_required".to_string(),
+            action_hint: Some("Allow / Deny".to_string()),
+            action_label: Some("Review".to_string()),
+            focus_source: true,
+            action_kind: Some("focus".to_string()),
+            automation_safe: false,
             ttl_seconds: 2,
             timestamp: None,
         };
@@ -730,6 +764,12 @@ mod focus_target_tests {
         assert_eq!(payload["groupKey"], "claude-quota");
         assert_eq!(payload["level"], "warning");
         assert_eq!(payload["sourceLabel"], "Claude Code");
+        assert_eq!(payload["noticeType"], "approval_required");
+        assert_eq!(payload["actionHint"], "Allow / Deny");
+        assert_eq!(payload["actionLabel"], "Review");
+        assert_eq!(payload["focusSource"], true);
+        assert_eq!(payload["actionKind"], "focus");
+        assert_eq!(payload["automationSafe"], false);
         assert_eq!(payload["ttlSeconds"], 15);
     }
 

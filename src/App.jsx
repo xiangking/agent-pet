@@ -87,6 +87,7 @@ const normalizeNotice = (payload = {}) => ({
   id: payload.id || payload.groupKey || `${payload.source || 'notice'}-${Date.now()}`,
   groupKey: payload.groupKey || payload.id || '',
   level: payload.level || 'info',
+  noticeType: payload.noticeType || payload.notice_type || 'info',
   title: payload.title || 'Notice',
   body: payload.body || '',
   value: payload.value || '',
@@ -94,6 +95,11 @@ const normalizeNotice = (payload = {}) => ({
   art: payload.art || '',
   source: payload.source || '',
   sourceLabel: payload.sourceLabel || '',
+  actionHint: payload.actionHint || payload.action_hint || '',
+  actionLabel: payload.actionLabel || payload.action_label || '',
+  focusSource: Boolean(payload.focusSource || payload.focus_source),
+  actionKind: payload.actionKind || payload.action_kind || '',
+  automationSafe: Boolean(payload.automationSafe || payload.automation_safe),
   ttlSeconds: Number.isFinite(Number(payload.ttlSeconds)) ? Number(payload.ttlSeconds) : null,
   receivedAt: Date.now(),
 })
@@ -817,6 +823,20 @@ function App() {
     setNotices((prev) => prev.filter((item) => (item.groupKey || item.id) !== key))
   }
 
+  const handleNoticeAction = async (event, notice) => {
+    event.stopPropagation()
+    if (!notice?.source) return
+
+    try {
+      await invoke('handle_notice_action', {
+        source: notice.source,
+        actionKind: notice.actionKind || 'focus',
+      })
+    } catch (e) {
+      console.error('Failed to handle notice action:', e)
+    }
+  }
+
   const handleToggleUsageDashboard = () => {
     if (usageDashboardVisible) {
       setUsageDashboardPinned(false)
@@ -868,6 +888,7 @@ function App() {
         displayWidth={displayWidth}
         getBackgroundPosition={getBackgroundPosition}
         handleBubbleClick={handleBubbleClick}
+        handleNoticeAction={handleNoticeAction}
         handleNoticeDismiss={handleNoticeDismiss}
         handleOpenSettings={handleOpenSettings}
         handlePetMouseDown={handlePetMouseDown}

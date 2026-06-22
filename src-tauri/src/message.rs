@@ -43,6 +43,24 @@ pub struct PetNotice {
     /// Optional display label for the source.
     #[serde(default, alias = "sourceLabel")]
     pub source_label: Option<String>,
+    /// Normalized actionable notice type.
+    #[serde(default = "default_notice_type", alias = "noticeType")]
+    pub notice_type: String,
+    /// Optional short hint for the action the user should take.
+    #[serde(default, alias = "actionHint")]
+    pub action_hint: Option<String>,
+    /// Optional label for the primary card action.
+    #[serde(default, alias = "actionLabel")]
+    pub action_label: Option<String>,
+    /// Whether the card action should focus the notice source.
+    #[serde(default, alias = "focusSource")]
+    pub focus_source: bool,
+    /// Planned action kind. V1 only performs focus; automation kinds are reserved.
+    #[serde(default, alias = "actionKind")]
+    pub action_kind: Option<String>,
+    /// Whether automatic execution is safe. V1 does not auto-execute.
+    #[serde(default, alias = "automationSafe")]
+    pub automation_safe: bool,
     /// How long the card should remain visible.
     #[serde(default = "default_notice_ttl_seconds", alias = "ttlSeconds")]
     pub ttl_seconds: u64,
@@ -100,6 +118,10 @@ fn default_notice_level() -> String {
 
 fn default_notice_title() -> String {
     "Notice".to_string()
+}
+
+fn default_notice_type() -> String {
+    "info".to_string()
 }
 
 fn default_notice_ttl_seconds() -> u64 {
@@ -195,17 +217,29 @@ mod tests {
         assert_eq!(notice.source, "");
         assert_eq!(notice.id, "");
         assert_eq!(notice.group_key, "");
+        assert_eq!(notice.notice_type, "info");
+        assert_eq!(notice.action_hint, None);
+        assert_eq!(notice.action_label, None);
+        assert!(!notice.focus_source);
+        assert_eq!(notice.action_kind, None);
+        assert!(!notice.automation_safe);
         assert_eq!(notice.ttl_seconds, 600);
     }
 
     #[test]
     fn pet_notice_accepts_camel_case_aliases() {
-        let json = r#"{"kind":"notice","id":"router-balance","groupKey":"router","title":"Low balance","message":"$1.24 left","sourceLabel":"OpenRouter","ttlSeconds":120}"#;
+        let json = r#"{"kind":"notice","id":"router-balance","groupKey":"router","title":"Low balance","message":"$1.24 left","sourceLabel":"OpenRouter","noticeType":"confirm_required","actionHint":"Y + Enter","actionLabel":"Review","focusSource":true,"actionKind":"focus","automationSafe":false,"ttlSeconds":120}"#;
         let notice: PetNotice = serde_json::from_str(json).unwrap();
         assert_eq!(notice.id, "router-balance");
         assert_eq!(notice.group_key, "router");
         assert_eq!(notice.body, "$1.24 left");
         assert_eq!(notice.source_label.as_deref(), Some("OpenRouter"));
+        assert_eq!(notice.notice_type, "confirm_required");
+        assert_eq!(notice.action_hint.as_deref(), Some("Y + Enter"));
+        assert_eq!(notice.action_label.as_deref(), Some("Review"));
+        assert!(notice.focus_source);
+        assert_eq!(notice.action_kind.as_deref(), Some("focus"));
+        assert!(!notice.automation_safe);
         assert_eq!(notice.ttl_seconds, 120);
     }
 
