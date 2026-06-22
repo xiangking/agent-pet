@@ -118,11 +118,28 @@ const normalizeUsageMetric = (payload = {}) => ({
 
 const listenSafe = async (eventName, handler) => {
   try {
-    return await listen(eventName, handler)
+    const unlisten = await listen(eventName, handler)
+    return () => {
+      try {
+        unlisten()
+      } catch (e) {
+        console.warn(`Failed to unlisten ${eventName}:`, e)
+      }
+    }
   } catch (e) {
     console.error(`Failed to listen for ${eventName}:`, e)
     return () => {}
   }
+}
+
+const cleanupListener = (listenerPromise) => {
+  Promise.resolve(listenerPromise)
+    .then((unlisten) => {
+      if (typeof unlisten === 'function') unlisten()
+    })
+    .catch((e) => {
+      console.warn('Failed to cleanup listener:', e)
+    })
 }
 
 function App() {
@@ -376,9 +393,8 @@ function App() {
       }, 4200)
     })
 
-    const unlistenPetNotice = listen('pet-notice', (event) => {
-      const title = event.payload?.title
-      if (!title) return
+    const unlistenPetNotice = listenSafe('pet-notice', (event) => {
+      if (!event.payload) return
 
       const notice = normalizeNotice(event.payload)
       setNotices((prev) => {
@@ -388,7 +404,9 @@ function App() {
       })
     })
 
-    const unlistenPetUsage = listen('pet-usage', (event) => {
+    const unlistenPetUsage = listenSafe('pet-usage', (event) => {
+      if (!event.payload) return
+
       const metric = normalizeUsageMetric(event.payload)
       setUsageMetrics((prev) => {
         const withoutExisting = prev.filter((item) => item.id !== metric.id)
@@ -397,12 +415,12 @@ function App() {
     })
 
     return () => {
-      unlistenState.then(f => f())
-      unlistenPetLoaded.then(f => f())
-      unlistenScaleChanged.then(f => f())
-      unlistenCodexBubble.then(f => f())
-      unlistenPetNotice.then(f => f())
-      unlistenPetUsage.then(f => f())
+      cleanupListener(unlistenState)
+      cleanupListener(unlistenPetLoaded)
+      cleanupListener(unlistenScaleChanged)
+      cleanupListener(unlistenCodexBubble)
+      cleanupListener(unlistenPetNotice)
+      cleanupListener(unlistenPetUsage)
       if (bubbleTimerRef.current) {
         clearTimeout(bubbleTimerRef.current)
       }
