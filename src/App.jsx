@@ -39,6 +39,9 @@ const POINTER_HIT_SELECTORS = [
 const NOTICE_WINDOW_WIDTH = 316
 const NOTICE_WINDOW_HEIGHT = 332
 const NOTICE_WINDOW_GAP = 12
+const NOTICE_CARD_HEIGHT = 124
+const NOTICE_CARD_GAP = 8
+const NOTICE_WINDOW_VERTICAL_PADDING = 16
 
 const isPointInsideVisiblePetSurface = (x, y) => {
   if (document.body.classList.contains('pet-pointer-capture')) return true
@@ -255,7 +258,16 @@ function App() {
       try {
         const noticeWindow = getCurrentWindow()
         const hasNotices = notices.length > 0
-        await noticeWindow.setSize(new LogicalSize(NOTICE_WINDOW_WIDTH, hasNotices ? NOTICE_WINDOW_HEIGHT : 1))
+        const visibleNoticeCount = Math.max(1, Math.min(notices.length, 2))
+        const noticeHeight = hasNotices
+          ? Math.min(
+            NOTICE_WINDOW_HEIGHT,
+            visibleNoticeCount * NOTICE_CARD_HEIGHT
+              + Math.max(0, visibleNoticeCount - 1) * NOTICE_CARD_GAP
+              + NOTICE_WINDOW_VERTICAL_PADDING,
+          )
+          : 1
+        await noticeWindow.setSize(new LogicalSize(NOTICE_WINDOW_WIDTH, noticeHeight))
         await noticeWindow.setIgnoreCursorEvents(!hasNotices)
 
         if (hasNotices) {
@@ -269,8 +281,9 @@ function App() {
             ])
             const petLogicalPosition = petPosition.toLogical(petScaleFactor)
             const petLogicalSize = petSize.toLogical(petScaleFactor)
+            const petSpriteTop = petLogicalPosition.y + petLogicalSize.height - displayHeight
             const x = Math.max(8, petLogicalPosition.x + (petLogicalSize.width - NOTICE_WINDOW_WIDTH) / 2)
-            const y = Math.max(8, petLogicalPosition.y - NOTICE_WINDOW_HEIGHT - NOTICE_WINDOW_GAP)
+            const y = Math.max(8, petSpriteTop - noticeHeight - NOTICE_WINDOW_GAP)
             await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
           }
         }
@@ -280,7 +293,7 @@ function App() {
     }
 
     resizeNoticeWindow()
-  }, [notices.length, windowLabel])
+  }, [displayHeight, notices.length, windowLabel])
 
   useEffect(() => {
     if (windowLabel !== 'pet') return undefined
@@ -964,7 +977,12 @@ function App() {
         usageDashboardPinned={usageDashboardPinned}
         usageDashboardVisible={false}
         usageMetrics={[]}
-        windowHeight={NOTICE_WINDOW_HEIGHT}
+        windowHeight={Math.min(
+          NOTICE_WINDOW_HEIGHT,
+          Math.max(1, Math.min(notices.length || 1, 2)) * NOTICE_CARD_HEIGHT
+            + Math.max(0, Math.min(notices.length || 1, 2) - 1) * NOTICE_CARD_GAP
+            + NOTICE_WINDOW_VERTICAL_PADDING,
+        )}
         windowWidth={NOTICE_WINDOW_WIDTH}
       />
     )

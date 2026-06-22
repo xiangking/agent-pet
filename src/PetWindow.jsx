@@ -362,7 +362,7 @@ function PetWindow({
         y: petTop - resolvePanelSize('usage').height - topGap,
       },
       notices: noticeOnly
-        ? { x: 10, y: 8 }
+        ? { x: 10, y: Math.max(8, windowHeight - noticePanelHeight - 8) }
         : {
           x: headX - noticeWidth / 2,
           y: petTop - noticePanelHeight - NOTICE_TOP_GAP,
