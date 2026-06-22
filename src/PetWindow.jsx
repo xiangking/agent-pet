@@ -310,7 +310,7 @@ function PetWindow({
   const hiddenNoticeCount = Math.max(0, notices.length - visibleNotices.length)
   const petTop = windowHeight - displayHeight
   const noticePanelHeight = noticeOnly
-    ? PANEL_DEFAULT_SIZES.notices.height
+    ? Math.max(0, windowHeight - 8)
     : clampNumber(
       Math.min(PANEL_DEFAULT_SIZES.notices.height, petTop - NOTICE_TOP_GAP - 8),
       Math.min(NOTICE_PANEL_MIN_HEIGHT, Math.max(0, petTop - NOTICE_TOP_GAP - 8)),

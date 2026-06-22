@@ -38,10 +38,11 @@ const POINTER_HIT_SELECTORS = [
 ]
 const NOTICE_WINDOW_WIDTH = 316
 const NOTICE_WINDOW_HEIGHT = 332
-const NOTICE_WINDOW_GAP = 12
+const NOTICE_WINDOW_GAP = 6
 const NOTICE_CARD_HEIGHT = 124
 const NOTICE_CARD_GAP = 8
 const NOTICE_WINDOW_VERTICAL_PADDING = 16
+const PET_GEOMETRY_STORAGE_KEY = 'agent-pet-current-geometry-v1'
 
 const isPointInsideVisiblePetSurface = (x, y) => {
   if (document.body.classList.contains('pet-pointer-capture')) return true
@@ -239,13 +240,19 @@ function App() {
         petWindow.scaleFactor(),
       ])
       const windowPosition = position.toLogical(scaleFactor)
-      await emit('pet-geometry', {
+      const geometry = {
         left: windowPosition.x + rect.left,
         top: windowPosition.y + rect.top,
         width: rect.width,
         height: rect.height,
         centerX: windowPosition.x + rect.left + rect.width / 2,
-      })
+      }
+      try {
+        window.localStorage.setItem(PET_GEOMETRY_STORAGE_KEY, JSON.stringify(geometry))
+      } catch {
+        // Geometry events still keep the live positioning usable.
+      }
+      await emit('pet-geometry', geometry)
     } catch (e) {
       console.error('Failed to publish pet geometry:', e)
     }
@@ -295,6 +302,17 @@ function App() {
   useEffect(() => {
     if (windowLabel !== 'notices') return
 
+    const readPetGeometry = () => {
+      if (petGeometryRef.current) return petGeometryRef.current
+      try {
+        const geometry = JSON.parse(window.localStorage.getItem(PET_GEOMETRY_STORAGE_KEY) || 'null')
+        if (geometry && typeof geometry === 'object') return geometry
+      } catch {
+        // Fall back to the pet window bounds below.
+      }
+      return null
+    }
+
     const positionNoticeWindow = async () => {
       try {
         const noticeWindow = getCurrentWindow()
@@ -310,7 +328,7 @@ function App() {
           : 1
         if (!hasNotices) return
 
-        const geometry = petGeometryRef.current
+        const geometry = readPetGeometry()
         if (geometry) {
           const noticeScaleFactor = await noticeWindow.scaleFactor()
           const x = Math.max(8, geometry.centerX - NOTICE_WINDOW_WIDTH / 2)
@@ -340,7 +358,7 @@ function App() {
 
         if (hasNotices) {
           await emit('request-pet-geometry')
-          const geometry = petGeometryRef.current
+          const geometry = readPetGeometry()
           if (geometry) {
             const noticeScaleFactor = await noticeWindow.scaleFactor()
             const x = Math.max(8, geometry.centerX - NOTICE_WINDOW_WIDTH / 2)
