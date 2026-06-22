@@ -88,23 +88,64 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn trigger_notice(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let sm = state.state_machine.lock().await;
-    sm.show_notice(&PetNotice {
-        id: "manual-test-notice".to_string(),
-        group_key: "manual-test-notice".to_string(),
-        level: "info".to_string(),
-        title: String::new(),
-        body: String::new(),
-        source: "manual".to_string(),
-        source_label: Some("Agent Pet".to_string()),
-        notice_type: "info".to_string(),
-        action_hint: None,
-        action_label: None,
-        focus_source: false,
-        action_kind: Some("focus".to_string()),
-        automation_safe: false,
-        ttl_seconds: 60,
-        timestamp: None,
-    });
+    let samples = [
+        (
+            "approval",
+            "warning",
+            "approval_required",
+            "Allow tool call: read ~/.local/share/opencode",
+            true,
+        ),
+        (
+            "confirm",
+            "warning",
+            "confirm_required",
+            "Continue with this operation? (y/n)",
+            true,
+        ),
+        (
+            "enter",
+            "warning",
+            "press_enter_required",
+            "Press Enter to continue",
+            true,
+        ),
+        (
+            "compact",
+            "info",
+            "context_compacting",
+            "Compacting context before continuing",
+            false,
+        ),
+        (
+            "failed",
+            "error",
+            "task_failed",
+            "Command failed with exit code 1",
+            true,
+        ),
+        ("info", "info", "info", "", false),
+    ];
+
+    for (id, level, notice_type, body, focus_source) in samples {
+        sm.show_notice(&PetNotice {
+            id: format!("manual-test-notice-{id}"),
+            group_key: format!("manual-test-notice-{id}"),
+            level: level.to_string(),
+            title: String::new(),
+            body: body.to_string(),
+            source: "manual".to_string(),
+            source_label: Some("Agent Pet".to_string()),
+            notice_type: notice_type.to_string(),
+            action_hint: None,
+            action_label: None,
+            focus_source,
+            action_kind: Some("focus".to_string()),
+            automation_safe: false,
+            ttl_seconds: 60,
+            timestamp: None,
+        });
+    }
     Ok(())
 }
 
