@@ -682,8 +682,9 @@ body {
   right: auto;
   top: auto;
   width: 100%;
-  min-height: 96px;
-  padding: 9px 11px 9px 12px;
+  height: 96px;
+  overflow: hidden;
+  padding: 8px 11px 12px 12px;
   transform: none;
   border: 0.5px solid rgba(255, 255, 255, 0.64);
   border-radius: 18px;
@@ -847,11 +848,14 @@ body {
 }
 
 .sticky-main {
-  min-height: 54px;
+  height: 58px;
   padding-top: 5px;
 }
 
 .sticky-copy {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   min-width: 0;
 }
 
@@ -907,7 +911,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: auto;
+  padding-top: 4px;
 }
 
 .sticky-action-hint {
@@ -931,8 +936,8 @@ body {
   flex: 0 0 auto;
   max-width: 82px;
   overflow: hidden;
-  height: 22px;
-  padding: 0 9px;
+  height: 20px;
+  padding: 0 8px;
   border: 0.5px solid rgba(0, 122, 255, 0.18);
   border-radius: 999px;
   background: rgba(0, 122, 255, 0.12);
