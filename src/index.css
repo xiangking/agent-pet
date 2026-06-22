@@ -28,15 +28,6 @@ body {
   cursor: grabbing;
 }
 
-.notice-window-container,
-.notice-window-container:active {
-  cursor: default;
-}
-
-.notice-window-container .notice-stack {
-  animation: panel-pop-right 0.2s ease-out;
-}
-
 .pet-sprite {
   width: 86px;
   height: 94px;
@@ -636,6 +627,8 @@ body {
 }
 
 .notice-scroll {
+  position: relative;
+  z-index: 2;
   display: grid;
   gap: 8px;
   max-height: var(--notice-scroll-height, 216px);
@@ -687,6 +680,7 @@ body {
 }
 
 .sticky-notice {
+  cursor: grab;
   position: relative;
   right: auto;
   top: auto;

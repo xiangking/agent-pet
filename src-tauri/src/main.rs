@@ -67,6 +67,12 @@ async fn get_current_state(state: tauri::State<'_, AppState>) -> Result<String, 
 }
 
 #[tauri::command]
+async fn get_current_notices(state: tauri::State<'_, AppState>) -> Result<Vec<serde_json::Value>, String> {
+    let sm = state.state_machine.lock().await;
+    Ok(sm.notice_payloads())
+}
+
+#[tauri::command]
 async fn trigger_state(
     state: tauri::State<'_, AppState>,
     message_type: String,
@@ -89,7 +95,7 @@ async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
 async fn trigger_notice(
     state: tauri::State<'_, AppState>,
     notice_type: Option<String>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let sm = state.state_machine.lock().await;
     let samples = [
         (
@@ -134,6 +140,7 @@ async fn trigger_notice(
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "all");
 
+    let mut emitted = 0;
     for (id, level, notice_type, body, focus_source) in samples {
         if requested_type
             .map(|requested| requested != notice_type)
@@ -159,8 +166,10 @@ async fn trigger_notice(
             ttl_seconds: 60,
             timestamp: None,
         });
+        emitted += 1;
     }
-    Ok(())
+    log::info!("Triggered {emitted} test notice(s)");
+    Ok(emitted)
 }
 
 #[tauri::command]
@@ -433,10 +442,6 @@ fn main() {
             if let Some(window) = app.get_webview_window("pet") {
                 let _ = window.show();
             }
-            if let Some(window) = app.get_webview_window("notices") {
-                let _ = window.show();
-                let _ = window.set_ignore_cursor_events(true);
-            }
             if std::env::var("AGENT_PET_SHOW_SETTINGS").ok().as_deref() == Some("1") {
                 tray::show_settings_window(&app_handle);
             }
@@ -478,6 +483,7 @@ fn main() {
             install_library_pet,
             load_pet,
             get_current_state,
+            get_current_notices,
             trigger_state,
             open_settings_window,
             trigger_notice,

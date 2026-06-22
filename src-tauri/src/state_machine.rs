@@ -6,6 +6,7 @@ use crate::pet::{load_pet_config, PetConfig, PetState};
 use crate::settings::{load_settings, save_settings, AppSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{Emitter, LogicalSize, Manager};
 
 const CELL_WIDTH: f64 = 192.0;
@@ -35,6 +36,7 @@ pub struct PetStateMachine {
     live_source_focus_targets: HashMap<String, String>,
     live_source_prefix_enabled: bool,
     usage_metrics: Vec<PetUsageMetric>,
+    notices: Mutex<Vec<PetNotice>>,
     pet_scale: f64,
     language: String,
 }
@@ -63,6 +65,7 @@ impl PetStateMachine {
             live_source_focus_targets: live_source_focus_targets_from_settings(&settings),
             live_source_prefix_enabled: settings.live_source_prefix_enabled,
             usage_metrics: Vec::new(),
+            notices: Mutex::new(Vec::new()),
             pet_scale: DEFAULT_PET_SCALE,
             language: normalize_language(&settings.language).to_string(),
         }
@@ -267,10 +270,29 @@ impl PetStateMachine {
     }
 
     pub fn show_notice(&self, notice: &PetNotice) {
-        if let Some(window) = self.app_handle.get_webview_window("notices") {
-            let _ = window.show();
-            let _ = window.emit("pet-notice", notice_payload(notice));
+        if let Ok(mut notices) = self.notices.lock() {
+            let key = limit_notice_key(&notice.group_key);
+            let id = limit_notice_key(&notice.id);
+            notices.retain(|item| {
+                let item_key = limit_notice_key(&item.group_key);
+                let item_id = limit_notice_key(&item.id);
+                let same_group = !key.is_empty() && item_key == key;
+                let same_id = !id.is_empty() && item_id == id;
+                !same_group && !same_id
+            });
+            notices.insert(0, notice.clone());
+            notices.truncate(8);
         }
+        let _ = self
+            .app_handle
+            .emit_to("pet", "pet-notice", notice_payload(notice));
+    }
+
+    pub fn notice_payloads(&self) -> Vec<serde_json::Value> {
+        self.notices
+            .lock()
+            .map(|notices| notices.iter().map(notice_payload).collect())
+            .unwrap_or_default()
     }
 
     pub fn show_usage_metric(&self, metric: &PetUsageMetric) {

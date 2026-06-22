@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { emit, listen } from '@tauri-apps/api/event'
-import { cursorPosition, getCurrentWindow, Window } from '@tauri-apps/api/window'
+import { emit, emitTo, listen } from '@tauri-apps/api/event'
+import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window'
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { t as translate } from './locales'
 import PetWindow from './PetWindow'
@@ -36,14 +36,9 @@ const POINTER_HIT_SELECTORS = [
   '.usage-dashboard',
   '.notice-stack',
 ]
-const NOTICE_WINDOW_WIDTH = 316
-const NOTICE_WINDOW_HEIGHT = 332
-const NOTICE_WINDOW_GAP = 6
 const NOTICE_CARD_HEIGHT = 124
 const NOTICE_CARD_GAP = 8
-const NOTICE_WINDOW_VERTICAL_PADDING = 16
-const PET_GEOMETRY_STORAGE_KEY = 'agent-pet-current-geometry-v1'
-const NOTICE_WINDOW_MANUAL_KEY = 'agent-pet-notice-window-manual-v1'
+const NOTICE_STACK_PADDING = 16
 
 const isPointInsideVisiblePetSurface = (x, y) => {
   if (document.body.classList.contains('pet-pointer-capture')) return true
@@ -124,6 +119,84 @@ const normalizeUsageMetric = (payload = {}) => ({
   meta: payload.meta && typeof payload.meta === 'object' ? payload.meta : {},
 })
 
+const upsertNotice = (items, notice) => {
+  const key = notice.groupKey || notice.id
+  const withoutExisting = items.filter((item) => (item.groupKey || item.id) !== key)
+  return [notice, ...withoutExisting].slice(0, 8)
+}
+
+const noticeTestSamples = [
+  {
+    id: 'manual-test-notice-approval',
+    groupKey: 'manual-test-notice-approval',
+    level: 'warning',
+    noticeType: 'approval_required',
+    body: 'Allow tool call: read ~/.local/share/opencode',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-confirm',
+    groupKey: 'manual-test-notice-confirm',
+    level: 'warning',
+    noticeType: 'confirm_required',
+    body: 'Continue with this operation? (y/n)',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-enter',
+    groupKey: 'manual-test-notice-enter',
+    level: 'warning',
+    noticeType: 'press_enter_required',
+    body: 'Press Enter to continue',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-compact',
+    groupKey: 'manual-test-notice-compact',
+    level: 'info',
+    noticeType: 'context_compacting',
+    body: 'Compacting context before continuing',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-failed',
+    groupKey: 'manual-test-notice-failed',
+    level: 'error',
+    noticeType: 'task_failed',
+    body: 'Command failed with exit code 1',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    focusSource: true,
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+  {
+    id: 'manual-test-notice-info',
+    groupKey: 'manual-test-notice-info',
+    level: 'info',
+    noticeType: 'info',
+    source: 'manual',
+    sourceLabel: 'Agent Pet',
+    actionKind: 'focus',
+    ttlSeconds: 60,
+  },
+]
+
 const listenSafe = async (eventName, handler) => {
   try {
     const unlisten = await listen(eventName, handler)
@@ -191,21 +264,33 @@ function App() {
   
   const animRef = useRef(null)
   const bubbleTimerRef = useRef(null)
+  const windowLabelRef = useRef('')
   const lastTimeRef = useRef(0)
   const frameRef = useRef(0)
   const stateRef = useRef('idle')
   const stateStartRef = useRef(Date.now())
   const windowFrameRef = useRef(null)
-  const petGeometryRef = useRef(null)
   const usageDashboardPinnedRef = useRef(usageDashboardPinned)
   const usageDashboardAutoHideTimerRef = useRef(null)
+  const dismissedNoticeKeysRef = useRef(new Set())
   const displayWidth = CELL_WIDTH * petScale
   const displayHeight = CELL_HEIGHT * petScale
   const usageDashboardVisible = usageDashboardPinned || usageDashboardTemporaryVisible
   const visibleUsageMetrics = usageDashboardVisible ? usageMetrics : []
-  const hasPetPanels = usageDashboardVisible
+  const hasNotices = notices.length > 0
+  const visibleNoticeCount = Math.min(Math.max(notices.length, 1), 2)
+  const noticeStackHeight = hasNotices
+    ? visibleNoticeCount * NOTICE_CARD_HEIGHT
+      + Math.max(0, visibleNoticeCount - 1) * NOTICE_CARD_GAP
+      + NOTICE_STACK_PADDING
+    : 0
+  const hasPetPanels = usageDashboardVisible || hasNotices
   const windowWidth = Math.max(displayWidth, MIN_WINDOW_WIDTH, hasPetPanels ? PET_STAGE_WIDTH : 0)
-  const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT + (hasPetPanels ? PET_STAGE_EXTRA_HEIGHT : 0)
+  const panelExtraHeight = Math.max(
+    usageDashboardVisible ? PET_STAGE_EXTRA_HEIGHT : 0,
+    noticeStackHeight,
+  )
+  const windowHeight = displayHeight + BUBBLE_SPACE_HEIGHT + panelExtraHeight
 
   const clearUsageDashboardAutoHide = () => {
     if (!usageDashboardAutoHideTimerRef.current) return
@@ -247,11 +332,6 @@ function App() {
         width: rect.width,
         height: rect.height,
         centerX: windowPosition.x + rect.left + rect.width / 2,
-      }
-      try {
-        window.localStorage.setItem(PET_GEOMETRY_STORAGE_KEY, JSON.stringify(geometry))
-      } catch {
-        // Geometry events still keep the live positioning usable.
       }
       await emit('pet-geometry', geometry)
     } catch (e) {
@@ -299,112 +379,6 @@ function App() {
       cleanupListener(unlistenGeometryRequest)
     }
   }, [displayHeight, displayWidth, petScale, spritesheet, windowLabel])
-
-  useEffect(() => {
-    if (windowLabel !== 'notices') return
-
-    const readPetGeometry = () => {
-      if (petGeometryRef.current) return petGeometryRef.current
-      try {
-        const geometry = JSON.parse(window.localStorage.getItem(PET_GEOMETRY_STORAGE_KEY) || 'null')
-        if (geometry && typeof geometry === 'object') return geometry
-      } catch {
-        // Fall back to the pet window bounds below.
-      }
-      return null
-    }
-
-    const positionNoticeWindow = async () => {
-      try {
-        const noticeWindow = getCurrentWindow()
-        const hasNotices = notices.length > 0
-        const visibleNoticeCount = Math.max(1, Math.min(notices.length, 2))
-        const noticeHeight = hasNotices
-          ? Math.min(
-            NOTICE_WINDOW_HEIGHT,
-            visibleNoticeCount * NOTICE_CARD_HEIGHT
-              + Math.max(0, visibleNoticeCount - 1) * NOTICE_CARD_GAP
-              + NOTICE_WINDOW_VERTICAL_PADDING,
-          )
-          : 1
-        if (!hasNotices) return
-
-        if (window.sessionStorage.getItem(NOTICE_WINDOW_MANUAL_KEY) === 'true') return
-
-        const geometry = readPetGeometry()
-        if (geometry) {
-          const noticeScaleFactor = await noticeWindow.scaleFactor()
-          const x = Math.max(8, geometry.centerX - NOTICE_WINDOW_WIDTH / 2)
-          const y = Math.max(8, geometry.top - noticeHeight - NOTICE_WINDOW_GAP)
-          await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
-        }
-      } catch (e) {
-        console.error('Failed to position notice window:', e)
-      }
-    }
-
-    const resizeNoticeWindow = async () => {
-      try {
-        const noticeWindow = getCurrentWindow()
-        const hasNotices = notices.length > 0
-        const visibleNoticeCount = Math.max(1, Math.min(notices.length, 2))
-        const noticeHeight = hasNotices
-          ? Math.min(
-            NOTICE_WINDOW_HEIGHT,
-            visibleNoticeCount * NOTICE_CARD_HEIGHT
-              + Math.max(0, visibleNoticeCount - 1) * NOTICE_CARD_GAP
-              + NOTICE_WINDOW_VERTICAL_PADDING,
-          )
-          : 1
-        await noticeWindow.setSize(new LogicalSize(NOTICE_WINDOW_WIDTH, noticeHeight))
-        await noticeWindow.setIgnoreCursorEvents(!hasNotices)
-
-        if (hasNotices) {
-          await emit('request-pet-geometry')
-          if (window.sessionStorage.getItem(NOTICE_WINDOW_MANUAL_KEY) === 'true') return
-
-          const geometry = readPetGeometry()
-          if (geometry) {
-            const noticeScaleFactor = await noticeWindow.scaleFactor()
-            const x = Math.max(8, geometry.centerX - NOTICE_WINDOW_WIDTH / 2)
-            const y = Math.max(8, geometry.top - noticeHeight - NOTICE_WINDOW_GAP)
-            await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
-          } else {
-            const petWindow = await Window.getByLabel('pet')
-            if (petWindow) {
-            const [petPosition, petSize, petScaleFactor, noticeScaleFactor] = await Promise.all([
-              petWindow.outerPosition(),
-              petWindow.outerSize(),
-              petWindow.scaleFactor(),
-              noticeWindow.scaleFactor(),
-            ])
-            const petLogicalPosition = petPosition.toLogical(petScaleFactor)
-            const petLogicalSize = petSize.toLogical(petScaleFactor)
-            const petSpriteTop = petLogicalPosition.y + petLogicalSize.height - displayHeight
-            const x = Math.max(8, petLogicalPosition.x + (petLogicalSize.width - NOTICE_WINDOW_WIDTH) / 2)
-            const y = Math.max(8, petSpriteTop - noticeHeight - NOTICE_WINDOW_GAP)
-            await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
-            }
-          }
-        }
-      } catch (e) {
-        console.error('Failed to resize notice window:', e)
-      }
-    }
-
-    resizeNoticeWindow()
-
-    const unlistenGeometry = listenSafe('pet-geometry', (event) => {
-      const payload = event.payload
-      if (!payload || typeof payload !== 'object') return
-      petGeometryRef.current = payload
-      positionNoticeWindow()
-    })
-
-    return () => {
-      cleanupListener(unlistenGeometry)
-    }
-  }, [displayHeight, notices.length, windowLabel])
 
   useEffect(() => {
     if (windowLabel !== 'pet') return undefined
@@ -490,11 +464,7 @@ function App() {
       }
 
       setWindowLabel(label)
-
-      if (label === 'notices') {
-        loadLanguage()
-        return
-      }
+      windowLabelRef.current = label
 
       if (label === 'pet') {
         loadLanguage()
@@ -502,6 +472,7 @@ function App() {
         loadPetList()
         loadInitialPet()
         loadUsageMetrics()
+        loadCurrentNotices()
       } else {
         loadPetScale()
         loadPetList()
@@ -563,11 +534,13 @@ function App() {
       if (!event.payload) return
 
       const notice = normalizeNotice(event.payload)
-      setNotices((prev) => {
-        const key = notice.groupKey || notice.id
-        const withoutExisting = prev.filter((item) => (item.groupKey || item.id) !== key)
-        return [notice, ...withoutExisting].slice(0, 8)
-      })
+      setNotices((prev) => upsertNotice(prev, notice))
+    })
+
+    const unlistenSyncNotices = listenSafe('sync-notices', () => {
+      if (windowLabelRef.current === 'pet') {
+        loadCurrentNotices()
+      }
     })
 
     const unlistenPetUsage = listenSafe('pet-usage', (event) => {
@@ -586,6 +559,7 @@ function App() {
       cleanupListener(unlistenScaleChanged)
       cleanupListener(unlistenCodexBubble)
       cleanupListener(unlistenPetNotice)
+      cleanupListener(unlistenSyncNotices)
       cleanupListener(unlistenPetUsage)
       if (bubbleTimerRef.current) {
         clearTimeout(bubbleTimerRef.current)
@@ -609,6 +583,15 @@ function App() {
 
     return () => clearInterval(timer)
   }, [notices])
+
+  useEffect(() => {
+    if (windowLabel !== 'pet') return undefined
+
+    loadCurrentNotices()
+    const timer = window.setInterval(loadCurrentNotices, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [windowLabel])
 
   // Animation loop
   useEffect(() => {
@@ -810,6 +793,22 @@ function App() {
     }
   }
 
+  const loadCurrentNotices = async () => {
+    try {
+      const currentNotices = await invoke('get_current_notices')
+      if (Array.isArray(currentNotices)) {
+        setNotices(
+          currentNotices
+            .map(normalizeNotice)
+            .filter((notice) => !dismissedNoticeKeysRef.current.has(notice.groupKey || notice.id))
+            .slice(0, 8),
+        )
+      }
+    } catch (e) {
+      console.error('Failed to load current notices:', e)
+    }
+  }
+
   const handleLoadPet = async (petId) => {
     try {
       const pet = await invoke('load_pet', { petId })
@@ -854,11 +853,19 @@ function App() {
   }
 
   const handleTriggerNotice = async (noticeType = 'all') => {
+    const selectedNoticeType = typeof noticeType === 'string' ? noticeType : 'all'
     try {
-      await invoke('trigger_notice', { noticeType })
+      const emitted = await invoke('trigger_notice', { noticeType: selectedNoticeType })
+      console.info('Triggered test notices:', emitted, selectedNoticeType)
+      await emitTo('pet', 'sync-notices', null)
     } catch (e) {
       console.error('Failed to trigger notice:', e)
     }
+
+    const samples = selectedNoticeType === 'all'
+      ? noticeTestSamples
+      : noticeTestSamples.filter((sample) => sample.noticeType === selectedNoticeType)
+    await Promise.all(samples.map((sample) => emitTo('pet', 'pet-notice', sample)))
   }
 
   const handleUpdateMessageMap = async (key, value) => {
@@ -1004,6 +1011,7 @@ function App() {
   const handleNoticeDismiss = (event, notice) => {
     event.stopPropagation()
     const key = notice.groupKey || notice.id
+    dismissedNoticeKeysRef.current.add(key)
     setNotices((prev) => prev.filter((item) => (item.groupKey || item.id) !== key))
   }
 
@@ -1062,43 +1070,6 @@ function App() {
     )
   }
 
-  if (windowLabel === 'notices') {
-    return (
-      <PetWindow
-        bubble={null}
-        currentState={currentState}
-        currentFrame={currentFrame}
-        displayHeight={displayHeight}
-        displayWidth={displayWidth}
-        getBackgroundPosition={getBackgroundPosition}
-        handleBubbleClick={handleBubbleClick}
-        handleNoticeAction={handleNoticeAction}
-        handleNoticeDismiss={handleNoticeDismiss}
-        handleOpenSettings={handleOpenSettings}
-        handlePetMouseDown={handlePetMouseDown}
-        handleTrigger={handleTrigger}
-        handleToggleUsageDashboard={handleToggleUsageDashboard}
-        handleToggleUsageDashboardPinned={handleToggleUsageDashboardPinned}
-        handleUsageDashboardActivity={showUsageDashboardTemporarily}
-        notices={notices}
-        noticeOnly
-        petScale={petScale}
-        spritesheet=""
-        t={t}
-        usageDashboardPinned={usageDashboardPinned}
-        usageDashboardVisible={false}
-        usageMetrics={[]}
-        windowHeight={Math.min(
-          NOTICE_WINDOW_HEIGHT,
-          Math.max(1, Math.min(notices.length || 1, 2)) * NOTICE_CARD_HEIGHT
-            + Math.max(0, Math.min(notices.length || 1, 2) - 1) * NOTICE_CARD_GAP
-            + NOTICE_WINDOW_VERTICAL_PADDING,
-        )}
-        windowWidth={NOTICE_WINDOW_WIDTH}
-      />
-    )
-  }
-
   if (windowLabel !== 'settings') {
     return (
       <PetWindow
@@ -1117,7 +1088,7 @@ function App() {
         handleToggleUsageDashboard={handleToggleUsageDashboard}
         handleToggleUsageDashboardPinned={handleToggleUsageDashboardPinned}
         handleUsageDashboardActivity={showUsageDashboardTemporarily}
-        notices={[]}
+        notices={notices}
         petScale={petScale}
         spritesheet={spritesheet}
         t={t}
