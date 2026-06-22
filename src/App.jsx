@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window'
+import { cursorPosition, getCurrentWindow, Window } from '@tauri-apps/api/window'
 import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { t as translate } from './locales'
 import PetWindow from './PetWindow'
@@ -36,6 +36,9 @@ const POINTER_HIT_SELECTORS = [
   '.usage-dashboard',
   '.notice-stack',
 ]
+const NOTICE_WINDOW_WIDTH = 292
+const NOTICE_WINDOW_HEIGHT = 264
+const NOTICE_WINDOW_GAP = 12
 
 const isPointInsideVisiblePetSurface = (x, y) => {
   if (document.body.classList.contains('pet-pointer-capture')) return true
@@ -252,8 +255,28 @@ function App() {
       try {
         const noticeWindow = getCurrentWindow()
         const hasNotices = notices.length > 0
-        await noticeWindow.setSize(new LogicalSize(292, hasNotices ? 264 : 1))
+        await noticeWindow.setSize(new LogicalSize(NOTICE_WINDOW_WIDTH, hasNotices ? NOTICE_WINDOW_HEIGHT : 1))
         await noticeWindow.setIgnoreCursorEvents(!hasNotices)
+
+        if (hasNotices) {
+          const petWindow = await Window.getByLabel('pet')
+          if (petWindow) {
+            const [petPosition, petSize, petScaleFactor, noticeScaleFactor] = await Promise.all([
+              petWindow.outerPosition(),
+              petWindow.outerSize(),
+              petWindow.scaleFactor(),
+              noticeWindow.scaleFactor(),
+            ])
+            const petLogicalPosition = petPosition.toLogical(petScaleFactor)
+            const petLogicalSize = petSize.toLogical(petScaleFactor)
+            const placeOnRight = petLogicalPosition.x >= NOTICE_WINDOW_WIDTH + NOTICE_WINDOW_GAP
+            const x = placeOnRight
+              ? petLogicalPosition.x - NOTICE_WINDOW_WIDTH - NOTICE_WINDOW_GAP
+              : petLogicalPosition.x + petLogicalSize.width + NOTICE_WINDOW_GAP
+            const y = Math.max(8, petLogicalPosition.y)
+            await noticeWindow.setPosition(new LogicalPosition(x, y).toPhysical(noticeScaleFactor))
+          }
+        }
       } catch (e) {
         console.error('Failed to resize notice window:', e)
       }
@@ -944,8 +967,8 @@ function App() {
         usageDashboardPinned={usageDashboardPinned}
         usageDashboardVisible={false}
         usageMetrics={[]}
-        windowHeight={264}
-        windowWidth={292}
+        windowHeight={NOTICE_WINDOW_HEIGHT}
+        windowWidth={NOTICE_WINDOW_WIDTH}
       />
     )
   }

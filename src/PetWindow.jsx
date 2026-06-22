@@ -316,7 +316,9 @@ function PetWindow({
       Math.min(NOTICE_PANEL_MIN_HEIGHT, Math.max(0, petTop - NOTICE_TOP_GAP - 8)),
       PANEL_DEFAULT_SIZES.notices.height,
     )
-  const noticeScrollHeight = Math.max(72, noticePanelHeight - NOTICE_TITLE_HEIGHT - NOTICE_STACK_GAP)
+  const noticeScrollHeight = noticeOnly
+    ? Math.max(72, noticePanelHeight - 8)
+    : Math.max(72, noticePanelHeight - NOTICE_TITLE_HEIGHT - NOTICE_STACK_GAP)
   const stackColors = ['yellow', 'mint', 'peach']
   const [panelPositions, setPanelPositions] = useState(readStoredPanelPositions)
   const [panelSizes, setPanelSizes] = useState(readStoredPanelSizes)
@@ -751,7 +753,7 @@ function PetWindow({
           onClick={(event) => event.stopPropagation()}
           style={{ left: noticePosition.x, top: noticePosition.y, height: noticePanelHeight }}
         >
-          <div className="stack-title">{t('notes')}</div>
+          {!noticeOnly && <div className="stack-title">{t('notes')}</div>}
           <div
             className="notice-scroll"
             style={{ '--notice-scroll-height': `${noticeScrollHeight}px` }}
