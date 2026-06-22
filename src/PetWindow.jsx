@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ATLAS_HEIGHT, ATLAS_WIDTH } from './constants'
 
-const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v2'
+const PANEL_POSITION_STORAGE_KEY = 'agent-pet-panel-positions-v3'
 const PANEL_SIZE_STORAGE_KEY = 'agent-pet-panel-sizes-v1'
 const MAX_VISIBLE_USAGE_METRICS = 24
 const NOTICE_CARD_HEIGHT = 96
@@ -9,10 +9,11 @@ const NOTICE_TITLE_HEIGHT = 23
 const NOTICE_OVERFLOW_HEIGHT = 23
 const NOTICE_STACK_GAP = 8
 const NOTICE_TOP_GAP = 12
+const NOTICE_PANEL_HEIGHT = NOTICE_TITLE_HEIGHT + NOTICE_STACK_GAP + NOTICE_CARD_HEIGHT * 2 + NOTICE_STACK_GAP * 2
 
 const PANEL_DEFAULT_SIZES = {
   usage: { width: 304, height: 258 },
-  notices: { width: 268, height: NOTICE_TITLE_HEIGHT + NOTICE_CARD_HEIGHT + NOTICE_STACK_GAP },
+  notices: { width: 268, height: NOTICE_PANEL_HEIGHT },
 }
 
 const PANEL_SIZE_LIMITS = {
@@ -27,13 +28,6 @@ const CONTEXT_MENU_SIZE = {
 }
 
 const clampNumber = (value, min, max) => Math.min(Math.max(value, min), max)
-
-const estimatedNoticeStackHeight = (visibleCount, hiddenCount) => {
-  if (visibleCount <= 0) return 0
-  const cardGaps = Math.max(0, visibleCount - 1) * NOTICE_STACK_GAP
-  const overflow = hiddenCount > 0 ? NOTICE_STACK_GAP + NOTICE_OVERFLOW_HEIGHT : 0
-  return NOTICE_TITLE_HEIGHT + NOTICE_STACK_GAP + visibleCount * NOTICE_CARD_HEIGHT + cardGaps + overflow
-}
 
 const readStoredPanelPositions = () => {
   try {
@@ -310,8 +304,9 @@ function PetWindow({
     () => groupUsageMetrics(visibleMetrics, t('localeCode')),
     [t, visibleMetrics],
   )
-  const visibleNotices = notices.slice(0, 4)
+  const visibleNotices = notices.slice(0, 8)
   const hiddenNoticeCount = Math.max(0, notices.length - visibleNotices.length)
+  const noticeScrollHeight = Math.max(128, PANEL_DEFAULT_SIZES.notices.height - NOTICE_TITLE_HEIGHT - NOTICE_STACK_GAP)
   const stackColors = ['yellow', 'mint', 'peach']
   const [panelPositions, setPanelPositions] = useState(readStoredPanelPositions)
   const [panelSizes, setPanelSizes] = useState(readStoredPanelSizes)
@@ -345,8 +340,7 @@ function PetWindow({
     const topGap = 42
     const sideGap = 12
     const noticeWidth = PANEL_DEFAULT_SIZES.notices.width
-    const noticeHeight = estimatedNoticeStackHeight(visibleNotices.length, hiddenNoticeCount)
-      || PANEL_DEFAULT_SIZES.notices.height
+    const noticeHeight = PANEL_DEFAULT_SIZES.notices.height
 
     return {
       usage: {
@@ -358,7 +352,7 @@ function PetWindow({
         y: petTop - noticeHeight - NOTICE_TOP_GAP,
       },
     }
-  }, [displayHeight, hiddenNoticeCount, resolvePanelSize, visibleNotices.length, windowHeight, windowWidth])
+  }, [displayHeight, resolvePanelSize, windowHeight, windowWidth])
 
   const clampPanelPosition = useCallback((panel, position, sizeOverride) => {
     const size = sizeOverride || resolvePanelSize(panel)
@@ -741,61 +735,66 @@ function PetWindow({
           style={{ left: noticePosition.x, top: noticePosition.y }}
         >
           <div className="stack-title">{t('notes')}</div>
-          {visibleNotices.map((item, index) => {
-            const value = item.value || item.detail || ''
-            const hasAction = item.focusSource || item.actionKind || item.actionLabel || item.actionHint
-            const noticeSuffix = noticeTranslationKeySuffix(item.noticeType || 'info')
-            const displayTitle = item.title || t(`noticeTitle${noticeSuffix}`)
-            const displayActionHint = item.actionHint || t(`noticeHint${noticeSuffix}`)
-            return (
-              <div
-                className={`sticky-notice sticky-${item.level || 'info'} sticky-type-${item.noticeType || 'info'} sticky-paper-${stackColors[index % stackColors.length]}`}
-                key={item.id}
-                style={{ '--stack-index': index }}
-                title={item.sourceLabel || item.source}
-              >
-                <div className="sticky-header">
-                  <span className="sticky-pin" aria-hidden="true">{noticeIcon[item.level] || noticeIcon.info}</span>
-                  <div className="sticky-source">{item.sourceLabel || item.source || 'Agent Pet'}</div>
-                  <div className="sticky-type">{noticeTypeLabel(item.noticeType || 'info', t('localeCode'))}</div>
-                  <button
-                    type="button"
-                    className="sticky-close"
-                    onMouseDown={(event) => event.stopPropagation()}
-                    onClick={(event) => handleNoticeDismiss(event, item)}
-                    aria-label={t('dismissNotice')}
-                  >
-                    {t('markNoticeRead')}
-                  </button>
-                </div>
-                <div className="sticky-main">
-                  <div className="sticky-copy">
-                    <div className="sticky-title">{displayTitle}</div>
-                    {value && <div className="sticky-value">{value}</div>}
-                    {item.body && <div className="sticky-body">{item.body}</div>}
-                    {(displayActionHint || hasAction) && (
-                      <div className="sticky-action-row">
-                        {displayActionHint && <span className="sticky-action-hint">{displayActionHint}</span>}
-                        {hasAction && item.source && handleNoticeAction && (
-                          <button
-                            type="button"
-                            className="sticky-action-button"
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClick={(event) => handleNoticeAction(event, item)}
-                          >
-                            {item.actionLabel || t('noticeActionReview')}
-                          </button>
-                        )}
-                      </div>
-                    )}
+          <div
+            className="notice-scroll"
+            style={{ '--notice-scroll-height': `${noticeScrollHeight}px` }}
+          >
+            {visibleNotices.map((item, index) => {
+              const value = item.value || item.detail || ''
+              const hasAction = item.focusSource || item.actionKind || item.actionLabel || item.actionHint
+              const noticeSuffix = noticeTranslationKeySuffix(item.noticeType || 'info')
+              const displayTitle = item.title || t(`noticeTitle${noticeSuffix}`)
+              const displayActionHint = item.actionHint || t(`noticeHint${noticeSuffix}`)
+              return (
+                <div
+                  className={`sticky-notice sticky-${item.level || 'info'} sticky-type-${item.noticeType || 'info'} sticky-paper-${stackColors[index % stackColors.length]}`}
+                  key={item.id}
+                  style={{ '--stack-index': index }}
+                  title={item.sourceLabel || item.source}
+                >
+                  <div className="sticky-header">
+                    <span className="sticky-pin" aria-hidden="true">{noticeIcon[item.level] || noticeIcon.info}</span>
+                    <div className="sticky-source">{item.sourceLabel || item.source || 'Agent Pet'}</div>
+                    <div className="sticky-type">{noticeTypeLabel(item.noticeType || 'info', t('localeCode'))}</div>
+                    <button
+                      type="button"
+                      className="sticky-close"
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onClick={(event) => handleNoticeDismiss(event, item)}
+                      aria-label={t('dismissNotice')}
+                    >
+                      {t('markNoticeRead')}
+                    </button>
+                  </div>
+                  <div className="sticky-main">
+                    <div className="sticky-copy">
+                      <div className="sticky-title">{displayTitle}</div>
+                      {value && <div className="sticky-value">{value}</div>}
+                      {item.body && <div className="sticky-body">{item.body}</div>}
+                      {(displayActionHint || hasAction) && (
+                        <div className="sticky-action-row">
+                          {displayActionHint && <span className="sticky-action-hint">{displayActionHint}</span>}
+                          {hasAction && item.source && handleNoticeAction && (
+                            <button
+                              type="button"
+                              className="sticky-action-button"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={(event) => handleNoticeAction(event, item)}
+                            >
+                              {item.actionLabel || t('noticeActionReview')}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
-          })}
-          {hiddenNoticeCount > 0 && (
-            <div className="sticky-overflow">{t('moreNotices', { count: hiddenNoticeCount })}</div>
-          )}
+              )
+            })}
+            {hiddenNoticeCount > 0 && (
+              <div className="sticky-overflow">{t('moreNotices', { count: hiddenNoticeCount })}</div>
+            )}
+          </div>
         </div>
       )}
 

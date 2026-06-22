@@ -626,6 +626,31 @@ body {
   animation: panel-pop-right 0.2s ease-out;
 }
 
+.notice-scroll {
+  display: grid;
+  gap: 8px;
+  max-height: var(--notice-scroll-height, 216px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 3px 2px 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(60, 60, 67, 0.24) transparent;
+  mask-image: linear-gradient(180deg, #000 0%, #000 calc(100% - 14px), rgba(0, 0, 0, 0.12) 100%);
+}
+
+.notice-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.notice-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.notice-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(60, 60, 67, 0.2);
+}
+
 .stack-title {
   position: relative;
   justify-self: end;
