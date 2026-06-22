@@ -1038,6 +1038,13 @@ body {
   letter-spacing: 0;
 }
 
+.section-subtitle {
+  margin-top: 3px;
+  color: #68707c;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .heading-actions {
   display: flex;
   align-items: center;
@@ -1061,6 +1068,59 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 10px;
+}
+
+.pet-library-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.86fr) minmax(320px, 1.14fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.pet-column {
+  min-width: 0;
+}
+
+.pet-column-body {
+  display: flex;
+  min-height: 440px;
+  flex-direction: column;
+}
+
+.pet-column-title {
+  margin-bottom: 8px;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.library-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pet-page-count {
+  color: #7a8390;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.installed-list,
+.library-list {
+  grid-template-columns: 1fr;
+  height: 376px;
+  overflow: auto;
+  padding-right: 4px;
+  align-content: start;
+}
+
+.pet-list-placeholder {
+  display: grid;
+  min-height: 376px;
+  place-items: center;
 }
 
 .pet-item {
@@ -1095,18 +1155,50 @@ body {
   pointer-events: none;
 }
 
+.library-pet-item {
+  align-items: flex-start;
+  cursor: default;
+}
+
+.library-pet-item:hover {
+  transform: none;
+}
+
 .pet-avatar {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 42px;
+  height: 46px;
   border: 1px solid rgba(31, 35, 40, 0.12);
   border-radius: 8px;
   background: linear-gradient(180deg, #ffffff, #f4f7ff);
   color: #2872ff;
   font-size: 15px;
   font-weight: 800;
+  overflow: hidden;
+}
+
+.library-avatar {
+  margin-top: 2px;
+  color: #5b46d8;
+  background: linear-gradient(180deg, #ffffff, #f4f0ff);
+}
+
+.pet-thumbnail.has-image {
+  background-color: #f8fafc;
+  color: transparent;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.pet-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  pointer-events: none;
 }
 
 .pet-item-info {
@@ -1131,6 +1223,44 @@ body {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.pet-meta,
+.pet-license {
+  color: #7a8390;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.pet-license {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.pet-action-button {
+  flex: 0 0 auto;
+  align-self: center;
+  min-width: 76px;
+}
+
+.library-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.library-pagination .button {
+  min-width: 78px;
+}
+
+.library-pagination .button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .message-map {
@@ -1329,6 +1459,20 @@ body {
   background: #f8fafc;
 }
 
+.boot-error {
+  max-height: 520px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: #fff0f0;
+  color: #8a1f17;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .test-actions {
   display: flex;
   gap: 8px;
@@ -1401,6 +1545,10 @@ button:hover {
 
 @media (max-width: 760px) {
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pet-library-layout {
     grid-template-columns: 1fr;
   }
 

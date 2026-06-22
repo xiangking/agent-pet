@@ -2,9 +2,12 @@
 // Compatible with: 1536x1872, 8x9 grid, 192x208 cells, WebP/PNG
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use image::ImageFormat;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 pub const COLUMNS: u32 = 8;
@@ -15,6 +18,11 @@ pub const ATLAS_WIDTH: u32 = COLUMNS * CELL_WIDTH;
 pub const ATLAS_HEIGHT: u32 = ROWS * CELL_HEIGHT;
 const APP_CONFIG_DIR: &str = "agent-pet";
 const LEGACY_CONFIG_DIR: &str = "codex-pet";
+const PET_LIBRARY_RAW_BASE: &str =
+    "https://raw.githubusercontent.com/legeling/awesome-codex-pet/main";
+const PET_LIBRARY_API_BASE: &str = "https://codex-pets.net/api";
+const PET_LIBRARY_PAGE_SIZE: u32 = 30;
+const PET_LIBRARY_MAX_PAGE_SIZE: u32 = 60;
 
 /// Animation states matching Codex protocol
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +158,91 @@ pub struct PetInfo {
     pub display_name: String,
     pub description: String,
     pub has_spritesheet: bool,
+    pub thumbnail_data_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemotePetCatalogItem {
+    slug: String,
+    name: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    author_handle: String,
+    #[serde(default)]
+    author_url: String,
+    #[serde(default)]
+    primary_category: String,
+    #[serde(default)]
+    license: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnlinePetCatalogItem {
+    id: String,
+    display_name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    spritesheet_path: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    owner_handle: String,
+    #[serde(default)]
+    owner_name: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    spritesheet_url: String,
+    #[serde(default)]
+    poster_url: String,
+    #[serde(default)]
+    preview_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnlinePetCatalogPage {
+    page: u32,
+    page_size: u32,
+    pets: Vec<OnlinePetCatalogItem>,
+    total: u32,
+    total_pages: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OnlinePetDetail {
+    pet: OnlinePetCatalogItem,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetLibraryItem {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub thumbnail_url: String,
+    pub author: String,
+    pub author_handle: String,
+    pub author_url: String,
+    pub category: String,
+    pub license: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PetLibraryPage {
+    pub items: Vec<PetLibraryItem>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u32,
+    pub total_pages: u32,
+    pub from_cache: bool,
 }
 
 #[derive(Error, Debug)]
@@ -164,6 +257,8 @@ pub enum PetError {
     InvalidSpritesheet(String),
     #[error("Image error: {0}")]
     Image(#[from] image::ImageError),
+    #[error("Network error: {0}")]
+    Network(#[from] reqwest::Error),
 }
 
 /// Get the user pets directory: ~/.config/agent-pet/pets/
@@ -215,6 +310,146 @@ fn validate_pet_id(pet_id: &str) -> Result<(), PetError> {
     }
 }
 
+fn validate_library_pet_id(pet_id: &str) -> Result<(), PetError> {
+    validate_pet_id(pet_id)?;
+
+    if pet_id.starts_with('-')
+        || pet_id.ends_with('-')
+        || !pet_id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(PetError::NotFound(format!(
+            "Invalid library pet id: {}",
+            pet_id
+        )));
+    }
+
+    Ok(())
+}
+
+fn remote_pet_asset_url(pet_id: &str, filename: &str) -> String {
+    format!("{PET_LIBRARY_RAW_BASE}/pets/{pet_id}/{filename}")
+}
+
+fn pet_library_cache_dir() -> Result<PathBuf, PetError> {
+    let cache =
+        dirs::cache_dir().ok_or_else(|| PetError::NotFound("Cache dir not found".to_string()))?;
+    let dir = cache.join(APP_CONFIG_DIR).join("pet-library");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn pet_library_page_cache_path(page: u32, page_size: u32, sort: &str) -> Result<PathBuf, PetError> {
+    let safe_sort: String = sort
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .collect();
+    Ok(pet_library_cache_dir()?.join(format!("{safe_sort}-page-{page}-size-{page_size}.json")))
+}
+
+fn temp_install_dir(user_dir: &Path, pet_id: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    user_dir.join(format!(".installing-{pet_id}-{stamp}"))
+}
+
+fn installed_pet_ids() -> std::collections::HashSet<String> {
+    list_pets_sync()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|pet| pet.has_spritesheet)
+        .map(|pet| pet.id)
+        .collect()
+}
+
+async fn fetch_pet_catalog() -> Result<Vec<RemotePetCatalogItem>, PetError> {
+    let url = format!("{PET_LIBRARY_RAW_BASE}/pets.json");
+    Ok(reqwest::get(url)
+        .await?
+        .error_for_status()?
+        .json::<Vec<RemotePetCatalogItem>>()
+        .await?)
+}
+
+fn normalize_library_page(page: u32) -> u32 {
+    page.max(1)
+}
+
+fn normalize_library_page_size(page_size: u32) -> u32 {
+    page_size.clamp(1, PET_LIBRARY_MAX_PAGE_SIZE)
+}
+
+async fn fetch_online_pet_catalog_page(
+    page: u32,
+    page_size: u32,
+    sort: &str,
+) -> Result<OnlinePetCatalogPage, PetError> {
+    let url = format!("{PET_LIBRARY_API_BASE}/pets?page={page}&pageSize={page_size}&sort={sort}");
+    Ok(reqwest::get(url)
+        .await?
+        .error_for_status()?
+        .json::<OnlinePetCatalogPage>()
+        .await?)
+}
+
+async fn fetch_online_pet_detail(pet_id: &str) -> Result<OnlinePetCatalogItem, PetError> {
+    let url = format!("{PET_LIBRARY_API_BASE}/pets/{pet_id}");
+    Ok(reqwest::get(url)
+        .await?
+        .error_for_status()?
+        .json::<OnlinePetDetail>()
+        .await?
+        .pet)
+}
+
+fn read_cached_online_pet_catalog_page(
+    page: u32,
+    page_size: u32,
+    sort: &str,
+) -> Result<Option<OnlinePetCatalogPage>, PetError> {
+    let cache_path = pet_library_page_cache_path(page, page_size, sort)?;
+    if !cache_path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(cache_path)?;
+    Ok(Some(serde_json::from_str::<OnlinePetCatalogPage>(
+        &content,
+    )?))
+}
+
+fn write_cached_online_pet_catalog_page(
+    page: &OnlinePetCatalogPage,
+    sort: &str,
+) -> Result<(), PetError> {
+    let cache_path = pet_library_page_cache_path(page.page, page.page_size, sort)?;
+    std::fs::write(cache_path, serde_json::to_vec(page)?)?;
+    Ok(())
+}
+
+async fn get_online_pet_catalog_page(
+    page: u32,
+    page_size: u32,
+    sort: &str,
+) -> Result<(OnlinePetCatalogPage, bool), PetError> {
+    let page = normalize_library_page(page);
+    let page_size = normalize_library_page_size(page_size);
+
+    match fetch_online_pet_catalog_page(page, page_size, sort).await {
+        Ok(catalog_page) => {
+            let _ = write_cached_online_pet_catalog_page(&catalog_page, sort);
+            Ok((catalog_page, false))
+        }
+        Err(error) => match read_cached_online_pet_catalog_page(page, page_size, sort)? {
+            Some(catalog_page) => Ok((catalog_page, true)),
+            None => Err(error),
+        },
+    }
+}
+
 fn validate_spritesheet_extension(path: &Path) -> Result<(), PetError> {
     let ext = path
         .extension()
@@ -248,6 +483,18 @@ fn spritesheet_data_url(path: &Path) -> Result<String, PetError> {
     let mime = spritesheet_mime(path)?;
     let bytes = std::fs::read(path)?;
     Ok(format!("data:{};base64,{}", mime, BASE64.encode(bytes)))
+}
+
+fn spritesheet_thumbnail_data_url(path: &Path) -> Result<String, PetError> {
+    validate_spritesheet(path)?;
+    let image = image::open(path)?;
+    let thumbnail = image.crop_imm(0, 0, CELL_WIDTH, CELL_HEIGHT);
+    let mut bytes = Cursor::new(Vec::new());
+    thumbnail.write_to(&mut bytes, ImageFormat::Png)?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        BASE64.encode(bytes.into_inner())
+    ))
 }
 
 fn canonical_child_path(base: &Path, candidate: &Path) -> Result<PathBuf, PetError> {
@@ -302,8 +549,11 @@ fn scan_pet_dir(dir: &Path, pets: &mut Vec<PetInfo>, seen: &mut std::collections
                             continue;
                         }
 
-                        let has_spritesheet =
-                            resolve_spritesheet_path(&path, &config.spritesheet_path).is_ok();
+                        let spritesheet = resolve_spritesheet_path(&path, &config.spritesheet_path);
+                        let has_spritesheet = spritesheet.is_ok();
+                        let thumbnail_data_url = spritesheet
+                            .ok()
+                            .and_then(|path| spritesheet_thumbnail_data_url(&path).ok());
 
                         // Deduplicate by id; user dir takes precedence over builtin
                         if seen.insert(config.id.clone()) {
@@ -312,6 +562,7 @@ fn scan_pet_dir(dir: &Path, pets: &mut Vec<PetInfo>, seen: &mut std::collections
                                 display_name: config.display_name,
                                 description: config.description,
                                 has_spritesheet,
+                                thumbnail_data_url,
                             });
                         }
                     }
@@ -321,21 +572,349 @@ fn scan_pet_dir(dir: &Path, pets: &mut Vec<PetInfo>, seen: &mut std::collections
     }
 }
 
-/// List all available pets (user dir + built-in dir)
-pub async fn list_pets(_app: tauri::AppHandle) -> Result<Vec<PetInfo>, PetError> {
+fn list_pets_sync() -> Result<Vec<PetInfo>, PetError> {
     let mut pets = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // 1. User custom pets (higher priority). Current Agent Pet dir wins over the legacy config dir.
     for user_dir in user_pet_dirs().unwrap_or_default() {
         scan_pet_dir(&user_dir, &mut pets, &mut seen);
     }
 
-    // 2. Built-in / example pets (lower priority)
     let builtin = builtin_pets_dir();
     scan_pet_dir(&builtin, &mut pets, &mut seen);
 
     Ok(pets)
+}
+
+/// List all available pets (user dir + built-in dir)
+pub async fn list_pets(_app: tauri::AppHandle) -> Result<Vec<PetInfo>, PetError> {
+    list_pets_sync()
+}
+
+pub async fn list_pet_library(page: Option<u32>) -> Result<PetLibraryPage, PetError> {
+    let requested_page = normalize_library_page(page.unwrap_or(1));
+    match list_online_pet_library_page(requested_page, PET_LIBRARY_PAGE_SIZE).await {
+        Ok(library_page) => Ok(library_page),
+        Err(_) if requested_page == 1 => list_legacy_pet_library_page().await,
+        Err(error) => Err(error),
+    }
+}
+
+async fn list_online_pet_library_page(
+    page: u32,
+    page_size: u32,
+) -> Result<PetLibraryPage, PetError> {
+    let (catalog_page, from_cache) =
+        get_online_pet_catalog_page(page, page_size, "popular").await?;
+    let installed = installed_pet_ids();
+
+    let items = catalog_page
+        .pets
+        .into_iter()
+        .filter(|item| validate_library_pet_id(&item.id).is_ok())
+        .map(|item| {
+            let category = if item.kind.trim().is_empty() {
+                item.tags.first().cloned().unwrap_or_default()
+            } else {
+                item.kind
+            };
+            let description = if item.description.trim().is_empty() {
+                "A downloadable desktop pet.".to_string()
+            } else {
+                item.description
+            };
+            let author = if item.owner_name.trim().is_empty() {
+                item.owner_handle.clone()
+            } else {
+                item.owner_name
+            };
+
+            PetLibraryItem {
+                installed: installed.contains(&item.id),
+                thumbnail_url: if item.poster_url.trim().is_empty() {
+                    item.preview_url
+                } else {
+                    item.poster_url
+                },
+                id: item.id,
+                display_name: item.display_name,
+                description,
+                author,
+                author_handle: item.owner_handle,
+                author_url: String::new(),
+                category,
+                license: String::new(),
+            }
+        })
+        .collect();
+
+    Ok(PetLibraryPage {
+        items,
+        page: catalog_page.page,
+        page_size: catalog_page.page_size,
+        total: catalog_page.total,
+        total_pages: catalog_page.total_pages,
+        from_cache,
+    })
+}
+
+async fn list_legacy_pet_library_page() -> Result<PetLibraryPage, PetError> {
+    let catalog = fetch_pet_catalog().await?;
+    let installed = installed_pet_ids();
+    let total = catalog.len() as u32;
+
+    let items = catalog
+        .into_iter()
+        .filter(|item| validate_library_pet_id(&item.slug).is_ok())
+        .map(|item| {
+            let description = item
+                .description
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or_else(|| {
+                    let category = item.primary_category.trim();
+                    if category.is_empty() {
+                        "A downloadable desktop pet.".to_string()
+                    } else {
+                        format!("A downloadable desktop pet in the {category} collection.")
+                    }
+                });
+
+            PetLibraryItem {
+                installed: installed.contains(&item.slug),
+                thumbnail_url: remote_pet_asset_url(&item.slug, "spritesheet.webp"),
+                id: item.slug,
+                display_name: item.name,
+                description,
+                author: item.author,
+                author_handle: item.author_handle,
+                author_url: item.author_url,
+                category: item.primary_category,
+                license: item.license,
+            }
+        })
+        .collect();
+
+    Ok(PetLibraryPage {
+        items,
+        page: 1,
+        page_size: total,
+        total,
+        total_pages: 1,
+        from_cache: false,
+    })
+}
+
+async fn find_online_pet(pet_id: &str) -> Result<OnlinePetCatalogItem, PetError> {
+    if let Ok(item) = fetch_online_pet_detail(pet_id).await {
+        if validate_library_pet_id(&item.id).is_ok() {
+            return Ok(item);
+        }
+    }
+
+    let mut page = 1;
+
+    loop {
+        let (catalog_page, _) =
+            get_online_pet_catalog_page(page, PET_LIBRARY_MAX_PAGE_SIZE, "popular").await?;
+        if let Some(item) = catalog_page.pets.into_iter().find(|item| item.id == pet_id) {
+            return Ok(item);
+        }
+
+        if page >= catalog_page.total_pages {
+            break;
+        }
+        page += 1;
+    }
+
+    Err(PetError::NotFound(format!(
+        "Pet is not available in the library: {}",
+        pet_id
+    )))
+}
+
+async fn install_online_pet_from_library(pet_id: &str) -> Result<PetInfo, PetError> {
+    validate_library_pet_id(pet_id)?;
+
+    let item = find_online_pet(pet_id).await?;
+    if item.spritesheet_url.trim().is_empty() {
+        return Err(PetError::InvalidSpritesheet(
+            "Library pet is missing a spritesheet URL".to_string(),
+        ));
+    }
+
+    if let Ok(config) = load_pet_config(pet_id).await {
+        let thumbnail_data_url = PathBuf::from(&config.spritesheet_path)
+            .parent()
+            .map(|dir| dir.join("spritesheet.webp"))
+            .and_then(|path| spritesheet_thumbnail_data_url(&path).ok());
+
+        return Ok(PetInfo {
+            id: config.id,
+            display_name: config.display_name,
+            description: config.description,
+            has_spritesheet: true,
+            thumbnail_data_url,
+        });
+    }
+
+    let user_dir = user_pets_dir()?;
+    let target_dir = user_dir.join(pet_id);
+    let temp_dir = temp_install_dir(&user_dir, pet_id);
+
+    if temp_dir.exists() {
+        std::fs::remove_dir_all(&temp_dir)?;
+    }
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let result = async {
+        let spritesheet_bytes = reqwest::get(item.spritesheet_url.clone())
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+
+        let config = PetConfig {
+            id: item.id.clone(),
+            display_name: item.display_name.clone(),
+            description: if item.description.trim().is_empty() {
+                "A downloadable desktop pet.".to_string()
+            } else {
+                item.description.clone()
+            },
+            spritesheet_path: "spritesheet.webp".to_string(),
+            spritesheet_data_url: None,
+            message_map: crate::message::default_message_map(),
+            state_durations: HashMap::new(),
+        };
+        let config_bytes = serde_json::to_vec_pretty(&config)?;
+        let config_path = temp_dir.join("pet.json");
+        let spritesheet_path = temp_dir.join("spritesheet.webp");
+        std::fs::write(&config_path, &config_bytes)?;
+        std::fs::write(&spritesheet_path, &spritesheet_bytes)?;
+
+        let config: PetConfig = serde_json::from_slice(&config_bytes)?;
+        if config.id != pet_id {
+            return Err(PetError::NotFound(format!(
+                "Library pet id '{}' does not match config '{}'",
+                pet_id, config.id,
+            )));
+        }
+        validate_pet_id(&config.id)?;
+        resolve_spritesheet_path(&temp_dir, &config.spritesheet_path)?;
+
+        Ok::<PetConfig, PetError>(config)
+    }
+    .await;
+
+    match result {
+        Ok(config) => {
+            if target_dir.exists() {
+                std::fs::remove_dir_all(&target_dir)?;
+            }
+            std::fs::rename(&temp_dir, &target_dir)?;
+
+            Ok(PetInfo {
+                id: config.id,
+                display_name: config.display_name,
+                description: config.description,
+                has_spritesheet: true,
+                thumbnail_data_url: spritesheet_thumbnail_data_url(
+                    &target_dir.join("spritesheet.webp"),
+                )
+                .ok(),
+            })
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            Err(error)
+        }
+    }
+}
+
+async fn install_legacy_pet_from_library(pet_id: &str) -> Result<PetInfo, PetError> {
+    validate_library_pet_id(pet_id)?;
+
+    let catalog = fetch_pet_catalog().await?;
+    if !catalog
+        .iter()
+        .any(|item| item.slug == pet_id && validate_library_pet_id(&item.slug).is_ok())
+    {
+        return Err(PetError::NotFound(format!(
+            "Pet is not available in the library: {}",
+            pet_id
+        )));
+    }
+
+    let user_dir = user_pets_dir()?;
+    let target_dir = user_dir.join(pet_id);
+    let temp_dir = temp_install_dir(&user_dir, pet_id);
+
+    if temp_dir.exists() {
+        std::fs::remove_dir_all(&temp_dir)?;
+    }
+    std::fs::create_dir_all(&temp_dir)?;
+
+    let result = async {
+        let config_bytes = reqwest::get(remote_pet_asset_url(pet_id, "pet.json"))
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        let spritesheet_bytes = reqwest::get(remote_pet_asset_url(pet_id, "spritesheet.webp"))
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+
+        let config_path = temp_dir.join("pet.json");
+        let spritesheet_path = temp_dir.join("spritesheet.webp");
+        std::fs::write(&config_path, &config_bytes)?;
+        std::fs::write(&spritesheet_path, &spritesheet_bytes)?;
+
+        let config: PetConfig = serde_json::from_slice(&config_bytes)?;
+        if config.id != pet_id {
+            return Err(PetError::NotFound(format!(
+                "Library pet id '{}' does not match config '{}'",
+                pet_id, config.id,
+            )));
+        }
+        validate_pet_id(&config.id)?;
+        resolve_spritesheet_path(&temp_dir, &config.spritesheet_path)?;
+
+        Ok::<PetConfig, PetError>(config)
+    }
+    .await;
+
+    match result {
+        Ok(config) => {
+            if target_dir.exists() {
+                std::fs::remove_dir_all(&target_dir)?;
+            }
+            std::fs::rename(&temp_dir, &target_dir)?;
+
+            Ok(PetInfo {
+                id: config.id,
+                display_name: config.display_name,
+                description: config.description,
+                has_spritesheet: true,
+                thumbnail_data_url: spritesheet_thumbnail_data_url(
+                    &target_dir.join("spritesheet.webp"),
+                )
+                .ok(),
+            })
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            Err(error)
+        }
+    }
+}
+
+pub async fn install_pet_from_library(pet_id: &str) -> Result<PetInfo, PetError> {
+    match install_online_pet_from_library(pet_id).await {
+        Ok(info) => Ok(info),
+        Err(_) => install_legacy_pet_from_library(pet_id).await,
+    }
 }
 
 /// Try to resolve a pet directory from user dir or built-in dir

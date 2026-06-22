@@ -40,6 +40,18 @@ async fn get_user_pet_dir() -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn get_pet_library(page: Option<u32>) -> Result<pet::PetLibraryPage, String> {
+    pet::list_pet_library(page).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn install_library_pet(pet_id: String) -> Result<pet::PetInfo, String> {
+    pet::install_pet_from_library(&pet_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn load_pet(
     state: tauri::State<'_, AppState>,
     pet_id: String,
@@ -341,6 +353,9 @@ fn main() {
             if let Some(window) = app.get_webview_window("pet") {
                 let _ = window.show();
             }
+            if std::env::var("AGENT_PET_SHOW_SETTINGS").ok().as_deref() == Some("1") {
+                tray::show_settings_window(&app_handle);
+            }
 
             // Spawn WebSocket server
             let sm_clone = state_machine.clone();
@@ -375,6 +390,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_pet_list,
             get_user_pet_dir,
+            get_pet_library,
+            install_library_pet,
             load_pet,
             get_current_state,
             trigger_state,
